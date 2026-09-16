@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  vectorqa-app:
+    build: .
+    ports:
+      - "8501:8501"
+    volumes:
+      # Persist vector DB and uploaded docs between container restarts.
+      # The JSON source files are baked into the image, but the vector DB
+      # lives here on the host so it survives image rebuilds.
+      - ./data/hadith_vectors:/app/data/hadith_vectors
+      - ./data/vectors:/app/data/vectors
+      - ./data/uploaded_docs:/app/data/uploaded_docs
+      # Mount app source for live-reload during development.
+      # Remove this line for a pure production deployment.
+      - ./app:/app/app
+      - ./.streamlit:/app/.streamlit
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s   # give first-run DB build time to finish

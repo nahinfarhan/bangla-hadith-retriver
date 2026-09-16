@@ -1,0 +1,15 @@
+# Versions proven to work with the fine-tuned hadith-retriever-bn-v2 model.
+# (matches the local conda env: hadith_qa)
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+streamlit==1.41.1
+chromadb==1.5.9
+sentence-transformers==5.5.1
+transformers==4.44.2
+huggingface-hub>=0.23.0
+torch==2.3.1+cpu
+pdfplumber==0.11.4
+tiktoken==0.7.0
+scikit-learn==1.5.2
+numpy==1.26.4
+rank-bm25==0.2.2

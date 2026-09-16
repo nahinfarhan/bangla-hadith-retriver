@@ -1,0 +1,78 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# ── Virtual envs ──────────────────────────────────────────────────────────────
+env/
+venv/
+.venv/
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Git ───────────────────────────────────────────────────────────────────────
+.git/
+.gitignore
+
+# ── Logs / test artefacts ─────────────────────────────────────────────────────
+*.log
+.coverage
+.coverage.*
+.cache/
+.pytest_cache/
+.mypy_cache/
+.tox/
+.hypothesis/
+
+# ── Model training checkpoint (3.1 GB — inference doesn't need this) ──────────
+models/hadith-retriever-bn-v2/checkpoint-3745/
+
+# ── Ablation / experimental vector DBs (only hadith_vectors goes in) ──────────
+data/hadith_vectors_*/
+data/vectors/
+data/uploaded_docs/
+data/hadith_vectors_baseline_backup/
+
+# ── Training data & progress logs (not needed at runtime) ─────────────────────
+data/*.jsonl
+data/*_progress.json
+data/*_key_usage.json
+data/generation_progress.json
+data/key_usage.json
+
+# ── Evaluations & notebooks ───────────────────────────────────────────────────
+evaluations/
+training/
+
+# ── Dev / docs only ───────────────────────────────────────────────────────────
+*.md
+*.puml
+*.txt
+!requirements-docker.txt
+*.bib
+Proposal/
+planning.txt
+ACTION_PLAN.md
+KIRO_STATUS.md
+
+# ── Dev scripts (not part of the app) ────────────────────────────────────────
+debug_app.py
+check_similarity.py
+load_hadith_data.py
+minimal_working_app.py
+test_hadith_processor.py
+evaluate.py
+build_hadith_db.py
+api.py
+
+# ── Docker dev files (not needed inside the image) ───────────────────────────
+docker-compose.yml
+entrypoint.sh
+.dockerignore
