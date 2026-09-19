@@ -106,7 +106,7 @@ The `query:` and `passage:` prefixes follow the `multilingual-e5` instruction fo
 
 Training pairs were generated from the raw hadith JSON files using a semi-automated pipeline:
 - Extract the hadith text from each entry
-- Generate a plausible question for the hadith using Gemini (`gemini-1.5-flash`)
+- Generate a plausible question for the hadith using Gemini (`gemini-3.1-flash`)
 - Store as `(question, hadith_text)` pairs in JSONL format
 - Files: `data/bukhari_training_pairs.jsonl`, `data/bukhari_enhanced_pairs.jsonl`, `data/muslim_enhanced_pairs.jsonl`
 
