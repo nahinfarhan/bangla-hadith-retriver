@@ -1,15 +1,11 @@
 """
 Hadith Chat — RAG-based conversational companion.
 
-Uses Google Gemini (via gemini_client.py) for natural language generation.
-Key rotation and cooldown are handled centrally by gemini_client.
+Uses Google Gemini via Vertex AI SDK (gemini_client.py) for natural language
+generation.  Authentication is handled by Application Default Credentials
+(GOOGLE_APPLICATION_CREDENTIALS) — no API key strings needed here.
 
-Keys are loaded from (in priority order):
-  1. GEMINI_API_KEYS env var  — comma-separated list
-  2. GEMINI_API_KEY  env var  — single key (legacy)
-  3. Keys entered in the sidebar UI
-
-Falls back to a template-based synthesizer if all keys fail or none provided.
+Falls back to a template-based synthesizer if the Vertex AI call fails.
 """
 
 import re
@@ -67,7 +63,7 @@ def _build_prompt(question: str, snippets: list, bangla: bool) -> str:
 - শুধুমাত্র নিচের হাদিস থেকে পাওয়া তথ্য ব্যবহার করো
 - উত্তর বাংলায় লেখো
 - সূত্র উল্লেখ করো যেমন [১], [২] ইত্যাদি
-- সংক্ষিপ্ত ও স্পষ্ট উত্তর দাও
+- প্রশ্নের ধরন অনুযায়ী প্রয়োজনীয় বিস্তারিত উত্তর দাও (একাধিক ধাপ বা নিয়ম থাকলে সব উল্লেখ করো)
 - হাদিসে না থাকলে সেটা স্বীকার করো
 
 হাদিস:
@@ -82,7 +78,7 @@ def _build_prompt(question: str, snippets: list, bangla: bool) -> str:
 Rules:
 - Use only information from the hadiths provided, do not add external knowledge
 - Cite sources using [1], [2], etc.
-- Keep the answer concise and clear
+- Provide as much detail as the question requires (list all steps or rules if applicable)
 - If the hadiths don't directly address the question, say so honestly
 
 Hadiths:
@@ -112,14 +108,16 @@ def _template_answer(question: str, snippets: list, bangla: bool) -> str:
 def synthesize_answer(
     question: str,
     hadiths: List[Dict],
-    api_key: str = "",        # single key from UI (legacy compat)
-    api_keys_raw: str = "",   # raw multi-key string from UI
+    # Legacy keyword arguments retained so existing call sites don't break.
+    # They are ignored — auth is now handled by ADC in gemini_client.
+    api_key: str = "",
+    api_keys_raw: str = "",
 ) -> Tuple[str, List[Dict]]:
     """
-    Build a natural-language answer from retrieved hadiths using Gemini.
+    Build a natural-language answer from retrieved hadiths using Gemini
+    (via Vertex AI).
 
-    Key rotation and cooldown are handled by gemini_client automatically.
-    Falls back to template if all keys fail or none are provided.
+    Falls back to a template answer if the Vertex AI call fails.
 
     Returns:
         answer  : str        — the synthesized answer
@@ -127,13 +125,14 @@ def synthesize_answer(
     """
     bangla = _is_bangla(question)
 
-    # Merge legacy single key + multi-key raw string for gemini_client
-    combined_ui = "\n".join(filter(None, [api_key, api_keys_raw]))
-
     # Filter to reasonably relevant results
     relevant = [h for h in hadiths if h.get("similarity", 0) >= 40]
     if not relevant:
         relevant = hadiths[:3]
+
+    # Cap the number of hadiths fed into the prompt to avoid an enormous
+    # context block that leaves little room for the generated answer.
+    relevant = relevant[:15]
 
     sources: List[Dict] = []
     snippets = []
@@ -153,13 +152,12 @@ def synthesize_answer(
         })
         snippets.append((ref, book, hid, core))
 
-    # ── Try Gemini via shared client (handles rotation + cooldown) ────────────
+    # ── Try Gemini via Vertex AI ──────────────────────────────────────────────
     try:
         prompt = _build_prompt(question, snippets, bangla)
         answer, _ = call_gemini(
             prompt,
-            extra_keys_raw=combined_ui,
-            max_tokens=1024,
+            max_tokens=4096,   # increased from 1024 — Bangla answers need more tokens
             temperature=0.3,
         )
         return answer, sources
