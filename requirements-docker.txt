@@ -13,3 +13,7 @@ tiktoken==0.7.0
 scikit-learn==1.5.2
 numpy==1.26.4
 rank-bm25==0.2.2
+
+# Vertex AI SDK — replaces the old AI Studio google-generativeai library.
+# Pinned to a stable release; bump carefully as the SDK evolves quickly.
+google-cloud-aiplatform==1.71.0

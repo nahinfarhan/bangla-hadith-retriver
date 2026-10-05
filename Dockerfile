@@ -1,14 +1,19 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Hadith QA — Hugging Face Spaces Docker image
+# Hadith QA — Hugging Face Spaces / VPS Docker image
 #
 # What gets baked in:
-#   • Python deps (CPU-only torch, sentence-transformers, chromadb …)
+#   • Python deps (CPU-only torch, sentence-transformers, chromadb,
+#                  google-cloud-aiplatform …)
 #   • app/           — Streamlit source
 #   • data/hadith_vectors/  — pre-built ChromaDB (273 MB, 20 499 hadiths)
 #   • data/*.json    — raw hadith JSON (Bukhari / Muslim / Tirmidhi)
 #   • models/hadith-retriever-bn-v2/  — fine-tuned embed model (~1 GB)
 #     ↳ checkpoint-3745/ is excluded (.dockerignore) — training artefact only
 #   • .streamlit/    — theme + server config
+#
+# What is NOT baked in:
+#   • Service-account key (gemini_auth.json) — mounted read-only at runtime
+#     via  -v /opt/hadith-app/secrets/gcp-key.json:/secrets/gcp-key.json:ro
 #
 # HF Spaces requirements:
 #   • Non-root user with UID/GID 1000
@@ -49,10 +54,19 @@ COPY data/hadith_vectors/          ./data/hadith_vectors/
 COPY models/hadith-retriever-bn-v2/ ./models/hadith-retriever-bn-v2/
 
 # ── Runtime directories ───────────────────────────────────────────────────────
-RUN mkdir -p data/vectors data/uploaded_docs \
-    && chown -R appuser:appuser /app
+RUN mkdir -p data/vectors data/uploaded_docs /secrets \
+    && chown -R appuser:appuser /app /secrets
 
 USER appuser
+
+# ── Vertex AI env defaults (overridden at runtime via --env-file) ─────────────
+# GOOGLE_APPLICATION_CREDENTIALS is set at container run time by mounting the
+# service-account key:
+#   -v /opt/hadith-app/secrets/gcp-key.json:/secrets/gcp-key.json:ro
+# and pointing the env var at the container-side path:
+#   GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-key.json
+ENV GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-key.json \
+    GCP_REGION=us-central1
 
 EXPOSE 7860
 

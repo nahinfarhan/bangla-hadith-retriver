@@ -72,6 +72,15 @@ evaluate.py
 build_hadith_db.py
 api.py
 
+# ── Secrets — never bake into image ──────────────────────────────────────────
+# The service-account key is mounted at runtime; it must never be baked in.
+gemini_auth.json
+gcp-key.json
+*_auth.json
+*.json.key
+.env
+secrets/
+
 # ── Docker dev files (not needed inside the image) ───────────────────────────
 docker-compose.yml
 entrypoint.sh

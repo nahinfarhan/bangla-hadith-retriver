@@ -303,25 +303,17 @@ def render_sidebar(hadith_stats):
         st.markdown('<div class="fancy-divider"></div>', unsafe_allow_html=True)
 
         import os as _os
-        _env_keys = _os.environ.get("GEMINI_API_KEYS", "") or _os.environ.get("GEMINI_API_KEY", "")
-        _key_count = len([k for k in _env_keys.replace("\n", ",").split(",") if k.strip()]) if _env_keys else 0
-        if _key_count:
-            try:
-                from gemini_client import get_active_key_count
-                active_count = get_active_key_count(_env_keys)
-                if active_count == _key_count:
-                    st.markdown(f'<div class="ai-status-on">🤖 AI powered · {_key_count} key(s) active</div>', unsafe_allow_html=True)
-                elif active_count > 0:
-                    st.markdown(f'<div class="ai-status-warn">⚠️ {active_count}/{_key_count} keys active</div>', unsafe_allow_html=True)
-                else:
-                    st.markdown('<div class="ai-status-off">❌ All keys exhausted</div>', unsafe_allow_html=True)
-            except Exception:
-                st.markdown(f'<div class="ai-status-on">🤖 {_key_count} key(s) configured</div>', unsafe_allow_html=True)
-            gemini_keys_raw = _env_keys
-        else:
-            gemini_keys_raw = ""
-            st.markdown('<div class="ai-status-off">⚠️ No Gemini keys configured</div>', unsafe_allow_html=True)
-        st.session_state["gemini_keys_raw"] = gemini_keys_raw
+        try:
+            from gemini_client import get_active_key_count, get_gemini_status
+            if get_active_key_count() == 1:
+                st.markdown('<div class="ai-status-on">🤖 AI powered · Vertex AI active</div>', unsafe_allow_html=True)
+            else:
+                st.markdown('<div class="ai-status-off">⚠️ Vertex AI not configured</div>', unsafe_allow_html=True)
+        except Exception:
+            st.markdown('<div class="ai-status-off">⚠️ Vertex AI unavailable</div>', unsafe_allow_html=True)
+        # gemini_keys_raw kept in session state for backward-compat with call sites;
+        # it is ignored by the new gemini_client but avoids KeyError elsewhere.
+        st.session_state["gemini_keys_raw"] = ""
 
         st.markdown('<div class="fancy-divider"></div>', unsafe_allow_html=True)
         st.markdown('<p class="section-label">📄 Upload Documents</p>', unsafe_allow_html=True)

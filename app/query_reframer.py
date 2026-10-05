@@ -1,9 +1,9 @@
 """
 query_reframer.py — LLM-based Query Reframing for Hadith Retrieval
 ===================================================================
-Uses Gemini (via gemini_client.py) to rewrite a user's natural-language
-question into 3 different retrieval query patterns that closely match
-hadith text and chapter styles.
+Uses Gemini via Vertex AI SDK (gemini_client.py) to rewrite a user's
+natural-language question into 3 different retrieval query patterns that
+closely match hadith text and chapter styles.
 
 Pattern 1: Direct hadith text style   — "যে ব্যক্তি ঝড়ের রাতে বাড়িতে সালাত আদায় করে..."
 Pattern 2: Chapter/Babu name style    — "বাড়িতে সালাত আদায়ের বিধান পরিচ্ছেদ"
@@ -72,11 +72,12 @@ def _parse_patterns(raw: str) -> List[str]:
 
 def reframe_query(query: str, extra_keys_raw: str = "") -> List[str]:
     """
-    Reframe a user query into 3 retrieval-optimised patterns via Gemini.
+    Reframe a user query into 3 retrieval-optimised patterns via Gemini
+    (Vertex AI).
 
     Args:
-        query:          The user's original question
-        extra_keys_raw: Additional Gemini keys from UI (comma/newline separated)
+        query:          The user's original question.
+        extra_keys_raw: Ignored — retained for call-site compatibility.
 
     Returns:
         List of 3 reframed query strings, or [original_query] on any failure.
@@ -89,7 +90,6 @@ def reframe_query(query: str, extra_keys_raw: str = "") -> List[str]:
         prompt = _build_prompt(query)
         raw, _ = call_gemini(
             prompt,
-            extra_keys_raw=extra_keys_raw,
             max_tokens=256,
             temperature=0.2,
         )
@@ -103,7 +103,10 @@ def reframe_query(query: str, extra_keys_raw: str = "") -> List[str]:
 
 
 def reframe_query_with_debug(query: str, extra_keys_raw: str = "") -> dict:
-    """Same as reframe_query but returns debug metadata for the UI."""
+    """Same as reframe_query but returns debug metadata for the UI.
+
+    extra_keys_raw is ignored — retained for call-site compatibility.
+    """
     original = query.strip()
     patterns = reframe_query(original, extra_keys_raw=extra_keys_raw)
     return {
