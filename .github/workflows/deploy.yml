@@ -22,7 +22,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ── 1.5. Download Model & Data from Hugging Face ────────────────────────
+      # ── 1.5. Set up Python and Download Data ────────────────────────────────
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
       - name: Download Hugging Face Data
         run: |
           pip install huggingface_hub
