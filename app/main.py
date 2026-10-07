@@ -543,6 +543,8 @@ def hadith_chat_tab(engine):
         st.session_state.chat_sources = {}   # message_idx -> list of source dicts
     if "expanded_source" not in st.session_state:
         st.session_state.expanded_source = {}  # (msg_idx, src_idx) -> bool
+    if "feedback_votes" not in st.session_state:
+        st.session_state.feedback_votes = {}  # msg_idx -> "up" | "down" | None
 
     # ── Render existing conversation ─────────────────────────────────────────
     for msg_idx, msg in enumerate(st.session_state.chat_history):
@@ -557,6 +559,28 @@ def hadith_chat_tab(engine):
             st.markdown('<div class="chat-bot-wrap">', unsafe_allow_html=True)
             st.markdown(f'<div class="chat-answer">{_esc(content)}</div>',
                         unsafe_allow_html=True)
+
+            # ── Feedback buttons ──────────────────────────────────────────────
+            current_vote = st.session_state.feedback_votes.get(msg_idx)
+            col_up, col_down, col_spacer = st.columns([1, 1, 10])
+            with col_up:
+                up_label = "👍" if current_vote != "up" else "👍 ✓"
+                if st.button(up_label, key=f"up_{msg_idx}", disabled=(current_vote == "up")):
+                    from feedback import log_vote
+                    user_q = (st.session_state.chat_history[msg_idx - 1]["content"]
+                              if msg_idx > 0 else "")
+                    log_vote(user_q, content, "up", sources, search_mode=chat_mode.split()[0].strip("🚀⚡"))
+                    st.session_state.feedback_votes[msg_idx] = "up"
+                    st.rerun()
+            with col_down:
+                down_label = "👎" if current_vote != "down" else "👎 ✓"
+                if st.button(down_label, key=f"down_{msg_idx}", disabled=(current_vote == "down")):
+                    from feedback import log_vote
+                    user_q = (st.session_state.chat_history[msg_idx - 1]["content"]
+                              if msg_idx > 0 else "")
+                    log_vote(user_q, content, "down", sources, search_mode=chat_mode.split()[0].strip("🚀⚡"))
+                    st.session_state.feedback_votes[msg_idx] = "down"
+                    st.rerun()
 
             # Source chips
             if sources:
