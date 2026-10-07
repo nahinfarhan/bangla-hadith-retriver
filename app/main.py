@@ -257,6 +257,11 @@ st.markdown("""
 # Cached loaders
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_resource(show_spinner=False)
+def load_query_cache():
+    from query_cache import QueryCache
+    return QueryCache()
+
+@st.cache_resource(show_spinner=False)
 def load_hadith_engine():
     app_dir = str(Path(__file__).parent.absolute())
     if app_dir not in sys.path:
@@ -636,15 +641,28 @@ def hadith_chat_tab(engine):
                 st.error(f"Search failed: {e}")
                 return
 
-        # Synthesize answer — stream token-by-token
-        from hadith_chat import synthesize_answer_stream
-        chunk_iter, sources = synthesize_answer_stream(q, raw_results)
+        # ── Cache lookup — skip Gemini entirely for repeated questions ──────
+        qcache = load_query_cache()
+        cache_hit = qcache.get(q)
+        if cache_hit:
+            cached_answer, sources = cache_hit
+            st.markdown('<div class="chat-bot-wrap">', unsafe_allow_html=True)
+            st.markdown(cached_answer)
+            st.markdown('</div>', unsafe_allow_html=True)
+            answer = cached_answer
+        else:
+            # Synthesize answer — stream token-by-token
+            from hadith_chat import synthesize_answer_stream
+            chunk_iter, sources = synthesize_answer_stream(q, raw_results)
 
-        # st.write_stream renders chunks as they arrive, then returns the
-        # full concatenated string so we can store it in chat history.
-        st.markdown('<div class="chat-bot-wrap">', unsafe_allow_html=True)
-        answer = st.write_stream(chunk_iter)
-        st.markdown('</div>', unsafe_allow_html=True)
+            # st.write_stream renders chunks as they arrive, then returns the
+            # full concatenated string so we can store it in chat history.
+            st.markdown('<div class="chat-bot-wrap">', unsafe_allow_html=True)
+            answer = st.write_stream(chunk_iter)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+            # Save to cache for future identical questions
+            qcache.set(q, answer, sources)
 
         # Append bot message
         st.session_state.chat_history.append({"role": "assistant", "content": answer})
