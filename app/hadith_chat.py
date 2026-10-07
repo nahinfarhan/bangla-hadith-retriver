@@ -9,9 +9,9 @@ Falls back to a template-based synthesizer if the Vertex AI call fails.
 """
 
 import re
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Iterator
 
-from gemini_client import call_gemini
+from gemini_client import call_gemini, stream_gemini
 
 _BANGLA_RE = re.compile(r"[\u0980-\u09FF]")
 
@@ -167,3 +167,60 @@ def synthesize_answer(
             + f"\n\n_(AI answer unavailable: {e})_"
         )
         return answer, sources
+
+
+def synthesize_answer_stream(
+    question: str,
+    hadiths: List[Dict],
+    api_key: str = "",
+    api_keys_raw: str = "",
+) -> Tuple[Iterator[str], List[Dict]]:
+    """
+    Streaming version of synthesize_answer.
+
+    Builds the prompt and source list identically to synthesize_answer, but
+    returns a generator of text chunks instead of a complete string so the
+    UI can render the answer token-by-token via st.write_stream().
+
+    Returns:
+        (chunk_iterator, sources)
+            chunk_iterator : Iterator[str] — yields text chunks as they arrive
+            sources        : list[dict]    — same source dicts as synthesize_answer
+
+    Falls back to a single-chunk iterator containing the template answer if
+    Vertex AI is unavailable or the stream fails.
+    """
+    bangla = _is_bangla(question)
+
+    relevant = [h for h in hadiths if h.get("similarity", 0) >= 40]
+    if not relevant:
+        relevant = hadiths[:3]
+    relevant = relevant[:15]
+
+    sources: List[Dict] = []
+    snippets = []
+
+    for i, h in enumerate(relevant, 1):
+        book     = h.get("book", "Unknown").replace("_", " ")
+        hid      = h.get("hadith_id", "?")
+        score    = h.get("similarity", 0)
+        raw_text = h.get("text", "")
+        core     = _extract_core(raw_text, bangla, max_chars=400)
+        ref      = f"[{i}]"
+
+        sources.append({
+            "ref": ref, "idx": i, "book": book,
+            "hadith_id": hid, "score": score,
+            "text": raw_text, "core": core,
+        })
+        snippets.append((ref, book, hid, core))
+
+    prompt = _build_prompt(question, snippets, bangla)
+
+    try:
+        chunk_iter = stream_gemini(prompt, max_tokens=4096, temperature=0.3)
+        return chunk_iter, sources
+    except Exception as e:
+        # Fall back to a single-chunk iterator so the call site stays uniform
+        fallback = _template_answer(question, snippets, bangla) + f"\n\n_(AI answer unavailable: {e})_"
+        return iter([fallback]), sources

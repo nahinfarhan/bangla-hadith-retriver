@@ -22,7 +22,7 @@ Usage:
 
 import os
 from pathlib import Path
-from typing import Tuple
+from typing import Tuple, Iterator
 
 import vertexai
 from vertexai.generative_models import (
@@ -115,6 +115,93 @@ def call_gemini(
     max_tokens: int = 8192,
     temperature: float = 0.3,
 ) -> Tuple[str, str]:
+    """
+    Send a prompt to Gemini via Vertex AI and return the full response.
+
+    Args:
+        prompt:         The prompt to send.
+        extra_keys_raw: Ignored (kept for backward compatibility).
+        max_tokens:     Maximum output tokens (default 8192 — Gemini 2.5 Flash
+                        uses an internal thinking budget that consumes tokens
+                        before producing visible text, so 1024 is too small).
+        temperature:    Sampling temperature.
+
+    Returns:
+        (answer_text, model_id)  — model_id is the GEMINI_MODEL string.
+
+    Raises:
+        RuntimeError: If Vertex AI is not configured or the call fails.
+    """
+    _ensure_vertexai()
+
+    model = GenerativeModel(GEMINI_MODEL)
+    generation_config = GenerationConfig(
+        temperature=temperature,
+        max_output_tokens=max_tokens,
+        top_p=0.9,
+    )
+
+    response = model.generate_content(
+        prompt,
+        generation_config=generation_config,
+        safety_settings=_SAFETY_SETTINGS,
+    )
+
+    text = response.text.strip() if response.text else ""
+    if not text:
+        raise RuntimeError("Vertex AI Gemini returned an empty response.")
+
+    return text, GEMINI_MODEL
+
+
+def stream_gemini(
+    prompt: str,
+    extra_keys_raw: str = "",   # no-op — retained for call-site compatibility
+    max_tokens: int = 8192,
+    temperature: float = 0.3,
+) -> Iterator[str]:
+    """
+    Stream a Gemini response token-by-token via Vertex AI.
+
+    Yields text chunks as they arrive so the UI can render progressively
+    instead of waiting for the full response.
+
+    Args:
+        prompt:         The prompt to send.
+        extra_keys_raw: Ignored (kept for backward compatibility).
+        max_tokens:     Maximum output tokens.
+        temperature:    Sampling temperature.
+
+    Yields:
+        str — successive text chunks from the model.
+
+    Raises:
+        RuntimeError: If Vertex AI is not configured or the stream fails.
+    """
+    _ensure_vertexai()
+
+    model = GenerativeModel(GEMINI_MODEL)
+    generation_config = GenerationConfig(
+        temperature=temperature,
+        max_output_tokens=max_tokens,
+        top_p=0.9,
+    )
+
+    responses = model.generate_content(
+        prompt,
+        generation_config=generation_config,
+        safety_settings=_SAFETY_SETTINGS,
+        stream=True,
+    )
+
+    for chunk in responses:
+        try:
+            text = chunk.text
+            if text:
+                yield text
+        except Exception:
+            # Some chunks (e.g. final usage metadata) have no .text — skip them
+            continue
     """
     Send a prompt to Gemini via Vertex AI and return the response.
 

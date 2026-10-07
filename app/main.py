@@ -636,13 +636,15 @@ def hadith_chat_tab(engine):
                 st.error(f"Search failed: {e}")
                 return
 
-        # Synthesize answer
-        from hadith_chat import synthesize_answer
-        with st.spinner("Generating answer…" if _gemini_keys_raw.strip() else "Synthesizing…"):
-            answer, sources = synthesize_answer(
-                q, raw_results,
-                api_keys_raw=_gemini_keys_raw,
-            )
+        # Synthesize answer — stream token-by-token
+        from hadith_chat import synthesize_answer_stream
+        chunk_iter, sources = synthesize_answer_stream(q, raw_results)
+
+        # st.write_stream renders chunks as they arrive, then returns the
+        # full concatenated string so we can store it in chat history.
+        st.markdown('<div class="chat-bot-wrap">', unsafe_allow_html=True)
+        answer = st.write_stream(chunk_iter)
+        st.markdown('</div>', unsafe_allow_html=True)
 
         # Append bot message
         st.session_state.chat_history.append({"role": "assistant", "content": answer})
