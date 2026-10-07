@@ -120,7 +120,7 @@ class HybridHadithSearch:
             self._vector_store  = VectorStore(persist_directory=self._db_path)
             self._embed_model   = EmbeddingModel()
             self._search_engine = SearchEngine(self._vector_store, self._embed_model)
-            self._bm25_index    = BM25HadithIndex(self._vector_store)
+            self._bm25_index    = BM25HadithIndex(self._vector_store, cache_dir=self._db_path)
         if self._use_reranker and self._reranker is None:
             try:
                 self._reranker = CrossEncoderReranker()
