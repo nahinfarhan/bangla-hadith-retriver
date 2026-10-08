@@ -128,11 +128,11 @@ def synthesize_answer(
     # Filter to reasonably relevant results
     relevant = [h for h in hadiths if h.get("similarity", 0) >= 40]
     if not relevant:
-        relevant = hadiths[:3]
+        relevant = hadiths[:10]
 
     # Cap the number of hadiths fed into the prompt to avoid an enormous
     # context block that leaves little room for the generated answer.
-    relevant = relevant[:15]
+    relevant = relevant[:20]
 
     sources: List[Dict] = []
     snippets = []
