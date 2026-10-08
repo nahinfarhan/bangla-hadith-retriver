@@ -17,3 +17,6 @@ rank-bm25==0.2.2
 # Vertex AI SDK — replaces the old AI Studio google-generativeai library.
 # Pinned to a stable release; bump carefully as the SDK evolves quickly.
 google-cloud-aiplatform==1.71.0
+
+# Error tracking — initialised only when SENTRY_DSN env var is set.
+sentry-sdk==2.19.2

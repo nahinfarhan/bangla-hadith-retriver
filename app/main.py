@@ -5,6 +5,10 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent))
 
+# ── Sentry error tracking (no-op if SENTRY_DSN not set) ──────────────────────
+from sentry_init import init_sentry
+init_sentry()
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Language helpers
 # ─────────────────────────────────────────────────────────────────────────────
