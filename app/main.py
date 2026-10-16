@@ -468,16 +468,20 @@ def hadith_search_tab(engine):
                 render_hadith_card(h, i, bangla)
     elif not go:
         st.markdown('<div class="empty-state"><div class="icon">🕌</div>'
-                    '<p>Enter a query to search across <strong style="color:#a78bfa">20,505 hadiths</strong><br>'
-                    'in Bangla or English · Bukhari · Muslim · Tirmidhi</p></div>',
+                    '<p>Enter a query to search across <strong style="color:#a78bfa">35,809 hadiths</strong><br>'
+                    'in Bangla or English · Bukhari · Muslim · Tirmidhi · Abu Dawud · Ibn Majah · Nasai · Nawawi</p></div>',
                     unsafe_allow_html=True)
 
     st.markdown('<div class="fancy-divider"></div>', unsafe_allow_html=True)
     st.markdown('<p class="section-label">🔢 Direct Lookup by Number</p>', unsafe_allow_html=True)
 
-    BOOKS = {"Ṣaḥīḥ al-Bukhārī":"Sahih_Bukhari",
-             "Ṣaḥīḥ Muslim":"Sahih_Muslim",
-             "Jāmiʿ at-Tirmidhī":"Jami_at_Tirmidhi"}
+    BOOKS = {"Ṣaḥīḥ al-Bukhārī":   "Sahih_Bukhari",
+             "Ṣaḥīḥ Muslim":        "Sahih_Muslim",
+             "Jāmiʿ at-Tirmidhī":   "Jami_at_Tirmidhi",
+             "Sunan Abī Dāwūd":     "Sunan_Abu_Dawud",
+             "Sunan Ibn Mājah":      "Sunan_Ibn_Majah",
+             "Sunan an-Nasāʾī":      "Sunan_an_Nasai",
+             "Riyāḍ aṣ-Ṣāliḥīn":   "Riyad_as_Salihin"}
     col_b, col_n, col_lb = st.columns([3, 2, 2])
     with col_b:
         book_label = st.selectbox("book", list(BOOKS.keys()),
@@ -520,7 +524,7 @@ def hadith_chat_tab(engine):
                 unsafe_allow_html=True)
     st.markdown(
         '<p style="color:#64748b;font-size:.85rem;margin-bottom:.5rem;">'
-        'I answer based on hadith from Bukhari, Muslim &amp; Tirmidhi. '
+        'I answer based on hadith from Bukhari, Muslim, Tirmidhi, Abu Dawud, Ibn Majah, Nasai &amp; Nawawi. '
         'Ask in Bangla or English.</p>', unsafe_allow_html=True)
 
     # ── Search mode selector ──────────────────────────────────────────────────
@@ -844,8 +848,8 @@ def main():
   <div class="hero-arabic">بِسْمِ اللَّهِ الرَّحْمَنِ الرَّحِيمِ</div>
   <div class="hero-title">🕌 Hadith Knowledge Search</div>
   <div class="hero-subtitle">
-    Semantic search · AI companion · 20,499 hadith
-    · Bangla &amp; English · Bukhari · Muslim · Tirmidhi
+    Semantic search · AI companion · 35,809 hadith
+    · Bangla &amp; English · Bukhari · Muslim · Tirmidhi · Abu Dawud · Ibn Majah · Nasai · Nawawi
   </div>
 </div>""", unsafe_allow_html=True)
 

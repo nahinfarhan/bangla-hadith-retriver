@@ -32,9 +32,13 @@ VECTOR_DB_PATH = str(ROOT_DIR / "data" / "hadith_vectors")
 SENTINEL_FILE  = str(ROOT_DIR / "data" / "hadith_vectors" / ".build_complete")
 
 JSON_SOURCES = [
-    (str(ROOT_DIR / "data" / "hadiths.json"),        "Sahih_Bukhari"),
-    (str(ROOT_DIR / "data" / "muslim_hadiths.json"), "Sahih_Muslim"),
-    (str(ROOT_DIR / "data" / "tirmidhi_hadiths.json"), "Jami_at_Tirmidhi"),
+    (str(ROOT_DIR / "data" / "hadiths.json"),           "Sahih_Bukhari"),
+    (str(ROOT_DIR / "data" / "muslim_hadiths.json"),    "Sahih_Muslim"),
+    (str(ROOT_DIR / "data" / "tirmidhi_hadiths.json"),  "Jami_at_Tirmidhi"),
+    (str(ROOT_DIR / "data" / "abu_dawud_hadiths.json"), "Sunan_Abu_Dawud"),
+    (str(ROOT_DIR / "data" / "ibnmajah_hadiths.json"),  "Sunan_Ibn_Majah"),
+    (str(ROOT_DIR / "data" / "nasai_hadiths.json"),     "Sunan_an_Nasai"),
+    (str(ROOT_DIR / "data" / "nawawi_hadiths.json"),    "Riyad_as_Salihin"),
 ]
 
 ARABIC_RE = re.compile(
