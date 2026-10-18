@@ -71,6 +71,30 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key:      ${{ secrets.VPS_SSH_KEY }}
           script: |
+            # ── Sync all hadith JSON files from HuggingFace ─────────────────
+            pip install -q huggingface_hub hf_transfer
+            HUGGINGFACE_HUB_ENABLE_HF_TRANSFER=1 python3 -c "
+            from huggingface_hub import snapshot_download
+            import shutil, os
+
+            # Download entire dataset repo to a temp location
+            local = snapshot_download(
+                repo_id='nahinfarhan/hadith-vectors-db',
+                repo_type='dataset',
+                local_dir='/tmp/hf_data',
+                ignore_patterns=['*.arrow','*.parquet'],
+            )
+
+            # Copy every JSON file to the data volume
+            data_dir = '/opt/hadith-app/data'
+            for f in os.listdir(local):
+                if f.endswith('.json'):
+                    src = os.path.join(local, f)
+                    dst = os.path.join(data_dir, f)
+                    shutil.copy2(src, dst)
+                    print(f'✅ {f}')
+            "
+
             # Pull the new image
             docker pull ghcr.io/nahinfarhan/hadith-app:latest
 
@@ -88,8 +112,13 @@ jobs:
               -v /opt/hadith-app/data:/app/data \
               ghcr.io/nahinfarhan/hadith-app:latest
 
+            # Rebuild the vector DB with all collections
+            echo "⏳ Rebuilding vector DB..."
+            docker exec hadith-app python3 app/build_hadith_db.py --force
+            echo "✅ Vector DB rebuilt"
+
             # Quick health check
-            sleep 10
+            sleep 5
             curl -sf http://localhost:7860/_stcore/health && echo " — deploy OK"
 
             # Remove dangling images to free disk space
