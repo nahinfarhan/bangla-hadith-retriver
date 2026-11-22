@@ -90,7 +90,10 @@ def reframe_query(query: str, extra_keys_raw: str = "") -> List[str]:
         prompt = _build_prompt(query)
         raw, _ = call_gemini(
             prompt,
-            max_tokens=256,
+            # Gemini 2.5 Flash spends output tokens on internal "thinking"
+            # before the JSON. 256 truncated the reply mid-JSON, so reframing
+            # silently fell back to the raw query on every search.
+            max_tokens=2048,
             temperature=0.2,
         )
         patterns = _parse_patterns(raw)

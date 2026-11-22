@@ -22,8 +22,12 @@ def _is_bangla(text: str) -> bool:
 
 # ── Hadith text extraction ────────────────────────────────────────────────────
 
-def _extract_core(text: str, bangla: bool, max_chars: int = 400) -> str:
-    """Pull the most content-rich portion of a stored hadith blob."""
+def _extract_core(text: str, bangla: bool, max_chars: int = 700) -> str:
+    """Pull the most content-rich portion of a stored hadith blob.
+
+    max_chars raised from 400 → 700 so the model receives substantially
+    more hadith content per source, yielding richer and more accurate answers.
+    """
     lines = text.splitlines()
     kept  = []
     for line in lines:
@@ -57,28 +61,32 @@ def _build_prompt(question: str, snippets: list, bangla: bool) -> str:
         for ref, book, hid, text in snippets
     )
     if bangla:
-        return f"""তুমি একজন ইসলামিক পণ্ডিতের সহকারী। নিচের হাদিসগুলোর উপর ভিত্তি করে প্রশ্নের উত্তর দাও।
+        return f"""তুমি একজন বিশেষজ্ঞ ইসলামিক পণ্ডিতের সহকারী। নিচের হাদিসগুলোর উপর ভিত্তি করে প্রশ্নের সম্পূর্ণ ও বিস্তারিত উত্তর দাও।
 
 নিয়মাবলী:
-- শুধুমাত্র নিচের হাদিস থেকে পাওয়া তথ্য ব্যবহার করো
+- শুধুমাত্র নিচের হাদিস থেকে পাওয়া তথ্য ব্যবহার করো, বাইরের জ্ঞান যোগ করো না
 - উত্তর বাংলায় লেখো
-- সূত্র উল্লেখ করো যেমন [১], [২] ইত্যাদি
-- প্রশ্নের ধরন অনুযায়ী প্রয়োজনীয় বিস্তারিত উত্তর দাও (একাধিক ধাপ বা নিয়ম থাকলে সব উল্লেখ করো)
-- হাদিসে না থাকলে সেটা স্বীকার করো
+- প্রতিটি তথ্যের পাশে সূত্র উল্লেখ করো যেমন [১], [২] ইত্যাদি
+- প্রশ্নের সকল দিক কভার করো — একাধিক ধাপ, শর্ত বা নিয়ম থাকলে সব বিস্তারিতভাবে আলোচনা করো
+- তালিকা বা ধাপে ধাপে উত্তর দেওয়া যুক্তিযুক্ত হলে সেভাবে দাও
+- সংক্ষিপ্ত উত্তরে সীমাবদ্ধ থেকো না — হাদিসে যা আছে তার পূর্ণ বিবরণ দাও
+- হাদিসে সরাসরি উল্লেখ না থাকলে সৎভাবে স্বীকার করো
 
 হাদিস:
 {context}
 
 প্রশ্ন: {question}
 
-উত্তর:"""
+বিস্তারিত উত্তর:"""
     else:
-        return f"""You are an Islamic knowledge assistant. Answer using ONLY the hadith excerpts below.
+        return f"""You are an expert Islamic knowledge assistant. Answer the question thoroughly and completely using ONLY the hadith excerpts below.
 
 Rules:
-- Use only information from the hadiths provided, do not add external knowledge
-- Cite sources using [1], [2], etc.
-- Provide as much detail as the question requires (list all steps or rules if applicable)
+- Use ONLY the information from the hadiths provided; do not add external knowledge
+- Cite every claim with its source using [1], [2], etc.
+- Cover all aspects of the question — list every step, condition, or rule mentioned across the hadiths
+- Use bullet points or numbered steps where appropriate for clarity
+- Do NOT give a brief summary — provide the full, detailed answer the hadiths support
 - If the hadiths don't directly address the question, say so honestly
 
 Hadiths:
@@ -86,7 +94,7 @@ Hadiths:
 
 Question: {question}
 
-Answer:"""
+Detailed Answer:"""
 
 
 # ── Template fallback ─────────────────────────────────────────────────────────
@@ -128,10 +136,12 @@ def synthesize_answer(
     # Filter to reasonably relevant results
     relevant = [h for h in hadiths if h.get("similarity", 0) >= 40]
     if not relevant:
+        # Looser fallback — use top 10 rather than nothing, so the model
+        # still has material to work with even on borderline queries.
         relevant = hadiths[:10]
 
-    # Cap the number of hadiths fed into the prompt to avoid an enormous
-    # context block that leaves little room for the generated answer.
+    # Cap at 20 hadiths. With 700-char excerpts this is a ~14k-char context
+    # block — well within the 1M-token context window of flash-lite.
     relevant = relevant[:20]
 
     sources: List[Dict] = []
@@ -142,7 +152,7 @@ def synthesize_answer(
         hid      = h.get("hadith_id", "?")
         score    = h.get("similarity", 0)
         raw_text = h.get("text", "")
-        core     = _extract_core(raw_text, bangla, max_chars=400)
+        core     = _extract_core(raw_text, bangla, max_chars=700)
         ref      = f"[{i}]"
 
         sources.append({
@@ -157,8 +167,8 @@ def synthesize_answer(
         prompt = _build_prompt(question, snippets, bangla)
         answer, _ = call_gemini(
             prompt,
-            max_tokens=4096,   # increased from 1024 — Bangla answers need more tokens
-            temperature=0.3,
+            max_tokens=8192,   # enough for long Bangla answers; matches client default
+            temperature=0.25,  # slightly lower → more faithful, less hallucination
         )
         return answer, sources
     except Exception as e:
@@ -180,7 +190,7 @@ def synthesize_answer_stream(
 
     Builds the prompt and source list identically to synthesize_answer, but
     returns a generator of text chunks instead of a complete string so the
-    UI can render the answer token-by-token via st.write_stream().
+    UI can render the answer token-by-token.
 
     Returns:
         (chunk_iterator, sources)
@@ -194,8 +204,9 @@ def synthesize_answer_stream(
 
     relevant = [h for h in hadiths if h.get("similarity", 0) >= 40]
     if not relevant:
-        relevant = hadiths[:3]
-    relevant = relevant[:15]
+        # Increased from 3 → 10 so borderline queries still get meaningful context
+        relevant = hadiths[:10]
+    relevant = relevant[:20]  # aligned with synthesize_answer cap
 
     sources: List[Dict] = []
     snippets = []
@@ -205,7 +216,7 @@ def synthesize_answer_stream(
         hid      = h.get("hadith_id", "?")
         score    = h.get("similarity", 0)
         raw_text = h.get("text", "")
-        core     = _extract_core(raw_text, bangla, max_chars=400)
+        core     = _extract_core(raw_text, bangla, max_chars=700)
         ref      = f"[{i}]"
 
         sources.append({
@@ -218,7 +229,11 @@ def synthesize_answer_stream(
     prompt = _build_prompt(question, snippets, bangla)
 
     try:
-        chunk_iter = stream_gemini(prompt, max_tokens=4096, temperature=0.3)
+        chunk_iter = stream_gemini(
+            prompt,
+            max_tokens=8192,   # match non-streaming path — no artificial cutoff
+            temperature=0.25,  # consistent with synthesize_answer
+        )
         return chunk_iter, sources
     except Exception as e:
         # Fall back to a single-chunk iterator so the call site stays uniform

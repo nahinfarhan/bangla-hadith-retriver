@@ -1,25 +1,9 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Hadith QA — Hugging Face Spaces / VPS Docker image
+# Hadith QA — Docker image (dev/VPS)
 #
-# What gets baked in:
-#   • Python deps (CPU-only torch, sentence-transformers, chromadb,
-#                  google-cloud-aiplatform …)
-#   • app/           — Streamlit source
-#   • data/hadith_vectors/  — pre-built ChromaDB (273 MB, 20 499 hadiths)
-#   • data/*.json    — raw hadith JSON (Bukhari / Muslim / Tirmidhi)
-#   • models/hadith-retriever-bn-v2/  — fine-tuned embed model (~1 GB)
-#     ↳ checkpoint-3745/ is excluded (.dockerignore) — training artefact only
-#   • .streamlit/    — theme + server config
-#
-# What is NOT baked in:
-#   • Service-account key (gemini_auth.json) — mounted read-only at runtime
-#     via  -v /opt/hadith-app/secrets/gcp-key.json:/secrets/gcp-key.json:ro
-#
-# HF Spaces requirements:
-#   • Non-root user with UID/GID 1000
-#   • App must listen on port 7860
+# Data (hadith_vectors/, *.json) and models/ are NOT baked in —
+# they are mounted at runtime via docker-compose volumes for fast builds.
 # ─────────────────────────────────────────────────────────────────────────────
-
 FROM python:3.11-slim
 
 # ── System deps ───────────────────────────────────────────────────────────────
@@ -28,52 +12,34 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
-# ── Non-root user (UID 1000 required by HF Spaces) ───────────────────────────
+# ── Non-root user ─────────────────────────────────────────────────────────────
 RUN useradd -m -u 1000 appuser
-
 WORKDIR /app
 
 # ── Python dependencies ───────────────────────────────────────────────────────
 COPY requirements-docker.txt .
 RUN pip install --no-cache-dir --timeout 1000 -r requirements-docker.txt
 
-# ── Application source ────────────────────────────────────────────────────────
-COPY app/                          ./app/
-COPY .streamlit/                   ./.streamlit/
-
-# ── Hadith data (JSON sources + pre-built vector DB) ─────────────────────────
-# Copy only the three hadith JSON files needed at runtime
-COPY data/hadiths.json             ./data/hadiths.json
-COPY data/muslim_hadiths.json      ./data/muslim_hadiths.json
-COPY data/tirmidhi_hadiths.json    ./data/tirmidhi_hadiths.json
-
-# Pre-built ChromaDB — skips the 10-minute first-run build on HF Spaces
-COPY data/hadith_vectors/          ./data/hadith_vectors/
-
-# ── Fine-tuned embedding model (~1 GB, checkpoint-3745 excluded) ──────────────
-COPY models/hadith-retriever-bn-v2/ ./models/hadith-retriever-bn-v2/
+# ── Application source only (data/models mounted at runtime) ──────────────────
+COPY app/ ./app/
+COPY .streamlit/ ./.streamlit/
 
 # ── Runtime directories ───────────────────────────────────────────────────────
-RUN mkdir -p data/vectors data/uploaded_docs /secrets \
+RUN mkdir -p data/hadith_vectors data/vectors data/uploaded_docs data/query_cache \
+             data/feedback /secrets \
     && chown -R appuser:appuser /app /secrets
 
 USER appuser
 
-# ── Vertex AI env defaults (overridden at runtime via --env-file) ─────────────
-# GOOGLE_APPLICATION_CREDENTIALS is set at container run time by mounting the
-# service-account key:
-#   -v /opt/hadith-app/secrets/gcp-key.json:/secrets/gcp-key.json:ro
-# and pointing the env var at the container-side path:
-#   GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-key.json
 ENV GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-key.json \
-    GCP_REGION=us-central1
+    GCP_REGION=us-central1 \
+    PYTHONUNBUFFERED=1
 
 EXPOSE 7860
 
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
     CMD curl -f http://localhost:7860/_stcore/health || exit 1
 
-# DB is already built — go straight to Streamlit on port 7860
 CMD ["streamlit", "run", "app/main.py", \
      "--server.port=7860", \
      "--server.address=0.0.0.0", \

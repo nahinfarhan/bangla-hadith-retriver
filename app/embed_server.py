@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
-"""
-embed_server.py — Subprocess embeddinhttps://app.kiro.dev/signin?state=48db339e-89b3-4eb0-94d4-ea63688a088a&code_challenge=aQLx_3dIlYLWPiZOPUx7Gk_iLwMMj-bVYj_OcUTpSbs&code_challenge_method=S256&redirect_uri=http%3A%2F%2Flocalhost%3A3128&redirect_from=KiroIDE worker (Python 3.11)
-============================================================
+"""Embedding server for hadith QA app.
 Designed to be called by embed.py via subprocess.  This file must be run
 with the hadith_qa conda environment (Python 3.11) because the system Python
 3.13 free-threading build causes segfaults in PyTorch BERT models.

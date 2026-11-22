@@ -1,16 +1,14 @@
 [theme]
-base = "dark"
-primaryColor = "#7c3aed"
-backgroundColor = "#0a0818"
-secondaryBackgroundColor = "#120e2e"
-textColor = "#e2e8f0"
-font = "sans serif"
+# Neutral base — CSS token overrides own all colours.
+# Do NOT add primaryColor / backgroundColor / textColor here;
+# the injected CSS handles both light and dark themes dynamically.
+base = "light"
 
 [server]
-headless = true
-port = 8501
-enableCORS = false
-enableXsrfProtection = false
+headless               = true
+port                   = 7860
+enableCORS             = false
+enableXsrfProtection   = false
 
 [browser]
-gatherUsageStats = false
+gatherUsageStats       = false

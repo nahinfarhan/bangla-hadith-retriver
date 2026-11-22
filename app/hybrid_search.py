@@ -210,10 +210,13 @@ class HybridHadithSearch:
         self._init_components()
 
         # Step 1: Query reframing → multiple variants
+        # The user's original wording is always kept as the first variant so
+        # exact keyword matches (BM25) aren't lost when Gemini rewrites it.
+        query_variants = [query]
         if use_reframing:
-            query_variants = reframe_query(query, extra_keys_raw=extra_keys_raw)
-        else:
-            query_variants = [query]
+            for v in reframe_query(query, extra_keys_raw=extra_keys_raw):
+                if v and v not in query_variants:
+                    query_variants.append(v)
 
         # Step 2: Dense retrieval — fetch more candidates than top_k for re-ranking
         fetch_k = max(top_k * 4, self._dense_k)   # scales with user's top_k
@@ -288,10 +291,13 @@ class HybridHadithSearch:
         self._init_components()
 
         # Optional query reframing
+        # The user's original wording is always kept as the first variant so
+        # exact keyword matches (BM25) aren't lost when Gemini rewrites it.
+        query_variants = [query]
         if use_reframing:
-            query_variants = reframe_query(query, extra_keys_raw=extra_keys_raw)
-        else:
-            query_variants = [query]
+            for v in reframe_query(query, extra_keys_raw=extra_keys_raw):
+                if v and v not in query_variants:
+                    query_variants.append(v)
 
         # Dense retrieval only — fetch top_k * 2 to have a bit of headroom
         fetch_k = max(top_k * 2, 30)

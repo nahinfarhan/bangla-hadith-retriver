@@ -4,29 +4,34 @@ services:
   vectorqa-app:
     build: .
     ports:
-      - "8501:7860"
+      - "7860:7860"
     volumes:
-      # Persist vector DB and uploaded docs between container restarts.
+      # App source — live reload during development
+      - ./app:/app/app
+      - ./.streamlit:/app/.streamlit
+      # Hadith data (pre-built vector DB + JSON sources)
       - ./data/hadith_vectors:/app/data/hadith_vectors
       - ./data/vectors:/app/data/vectors
       - ./data/uploaded_docs:/app/data/uploaded_docs
-      # Mount app source for live-reload during development.
-      # Remove this for a pure production deployment.
-      - ./app:/app/app
-      - ./.streamlit:/app/.streamlit
-      # Mount the GCP service-account key read-only.
-      # The host path should point to the actual key file (never committed).
-      # Matches GOOGLE_APPLICATION_CREDENTIALS inside the container.
+      - ./data/query_cache:/app/data/query_cache
+      - ./data/feedback:/app/data/feedback
+      # All hadith JSON files
+      - ./data/hadiths.json:/app/data/hadiths.json
+      - ./data/muslim_hadiths.json:/app/data/muslim_hadiths.json
+      - ./data/tirmidhi_hadiths.json:/app/data/tirmidhi_hadiths.json
+      - ./data/abu_dawud_hadiths.json:/app/data/abu_dawud_hadiths.json
+      - ./data/ibnmajah_hadiths.json:/app/data/ibnmajah_hadiths.json
+      - ./data/nasai_hadiths.json:/app/data/nasai_hadiths.json
+      - ./data/nawawi_hadiths.json:/app/data/nawawi_hadiths.json
+      # Fine-tuned embedding model
+      - ./models:/app/models
+      # GCP service-account key (read-only)
       - ./gemini_auth.json:/secrets/gcp-key.json:ro
     environment:
       - PYTHONUNBUFFERED=1
-      # Vertex AI auth — path is the container-side mount point above.
       - GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-key.json
-      # Set your GCP project ID here (or load from .env via env_file below).
       - GCP_PROJECT_ID=${GCP_PROJECT_ID}
       - GCP_REGION=${GCP_REGION:-us-central1}
-    # Optionally load additional variables (e.g. GCP_PROJECT_ID) from a .env
-    # file that is NOT committed to git.
     env_file:
       - path: .env
         required: false
@@ -36,4 +41,4 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 120s
+      start_period: 60s

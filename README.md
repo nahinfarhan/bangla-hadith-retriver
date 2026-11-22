@@ -170,6 +170,45 @@ huggingface-cli download nahinfarhan/hadith-retriever-bn-v2 \
 
 ---
 
+## UI
+
+The app has a minimal, single-column Bangla Islamic Q&A interface built on Streamlit.
+
+### Layout
+
+- **No sidebar, no tabs bar.** One centred column (max-width 760 px).
+- **One round theme button** (light ↔ dark) fixed at the right edge. First visit follows `prefers-color-scheme`; preference is saved in `localStorage`.
+- **Two views**, switched via `st.session_state["view"]` (also reflected in `?view=`):
+  1. **Chat** — Home (logo + greeting + glowing composer) → conversation with streamed Markdown answers, source hadith cards, and 👍/👎 feedback.
+  2. **Hadith Books** — search bar (Enter to search), book select (7 books, Bangla names), number-jump field, infinite-scroll browse list (3 cards at a time).
+
+### Features
+
+| Feature | Description |
+|---------|-------------|
+| **Cache (⚡ দ্রুত উত্তর)** | Repeated questions are answered from a disk-backed cache (TTL 7 days). The cache is checked *before* retrieval — no Gemini call is made on a cache hit. |
+| **Streaming** | Non-cached answers stream token-by-token via `st.write_stream`. Typing dots appear before the first token. |
+| **Feedback** | 👍 / 👎 buttons appear under every AI answer. Votes are logged to `data/feedback/votes.jsonl`. |
+| **Hadith Books** | Browse any of the 7 books in number order with infinite scroll. Search with Gemini query reframing. Jump to a specific hadith number with a 1.8 s accent-ring flash. |
+| **Hadith Card** | Shows book name, hadith number, grade badge, narrator, Bangla body, English translation (if stored), and Arabic (only if actually present in the DB — it normally isn't). Footer has **কপি** (clipboard) and **AI-কে জিজ্ঞেস করুন** (opens Chat pre-filled). |
+
+### Hidden route
+
+Document Q&A (PDF/TXT upload) is preserved but not shown in the normal UI. Access it at `?view=docs`.
+
+### Source files
+
+| File | Purpose |
+|------|---------|
+| `app/main.py` | Orchestrator: session state, view routing, cache-first chat flow |
+| `app/ui/theme.py` | CSS string builder (tokens, glow, widget overrides, both themes) |
+| `app/ui/components.py` | Render helpers: logo, top bar, hadith card, source cards, feedback row |
+| `app/ui/scripts.py` | Injected JS: theme toggle, copy handler, infinite-scroll sentinel, aria patches |
+| `app/ui/data.py` | Browse index + page fetch (read-only, cached per book) |
+| `UI_NOTES.md` | Known limitations and out-of-scope decisions |
+
+---
+
 ## Running Locally
 
 ### Prerequisites

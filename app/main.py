@@ -1,932 +1,988 @@
+"""
+Bangla Islamic QA — Streamlit frontend (new UI)
+
+Architecture:
+  - app/ui/theme.py     CSS string builder
+  - app/ui/components.py  render helpers (logo, top bar, hadith card, etc.)
+  - app/ui/scripts.py   injected JS (theme toggle, copy, infinite scroll, aria)
+  - app/ui/data.py      browse index + page fetch (read-only, cached)
+  - app/main.py         orchestrator: session init, view routing, backend calls
+
+The one rule: change the UI only — backend modules are never modified.
+"""
+import html as _html
 import re as _re
-import streamlit as st
 import sys
 from pathlib import Path
 
-sys.path.append(str(Path(__file__).parent))
+import streamlit as st
 
-# ── Sentry error tracking (no-op if SENTRY_DSN not set) ──────────────────────
+# ── Make app/ importable regardless of cwd ──────────────────────────────────
+_APP_DIR = str(Path(__file__).parent.absolute())
+if _APP_DIR not in sys.path:
+    sys.path.insert(0, _APP_DIR)
+
 from sentry_init import init_sentry
 init_sentry()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Language helpers
-# ─────────────────────────────────────────────────────────────────────────────
+# ── UI package ───────────────────────────────────────────────────────────────
+from ui import LOGO_MASK_B64
+from ui.theme import build_css
+from ui.components import (
+    logo_html, top_bar, typing_dots_html, cached_tag_html,
+    error_state, skeleton_card_html, hadith_card,
+    hadith_card_header_body_html, source_cards, feedback_row,
+    html_block, parse_hadith,
+)
+from ui.scripts import (
+    theme_toggle_script, copy_handler_script,
+    infinite_scroll_script, aria_patch_script,
+)
+from ui.data import browse_index, fetch_page
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Page config  (must be the first Streamlit call)
+# ═══════════════════════════════════════════════════════════════════════════
+st.set_page_config(
+    page_title="Bangla Islamic Q&A",
+    page_icon="🕌",
+    layout="centered",
+    initial_sidebar_state="collapsed",
+)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Helpers  (kept from the old main.py, no functional change)
+# ═══════════════════════════════════════════════════════════════════════════
 _BANGLA_RE = _re.compile(r"[\u0980-\u09FF]")
+
 
 def is_bangla(text: str) -> bool:
     return bool(_BANGLA_RE.search(text))
 
-def extract_display_text(full_text: str, bangla_query: bool) -> str:
-    lines = full_text.splitlines()
-    if bangla_query:
-        kept = [l for l in lines if _BANGLA_RE.search(l) or not l.strip()]
-        result = "\n".join(kept).strip()
-    else:
-        en_lines = []
-        for l in lines:
-            s = l.strip()
-            if not s or s.startswith("বর্ণনাকারী"):
-                continue
-            if len(_BANGLA_RE.findall(s)) / max(len(s), 1) < 0.2:
-                en_lines.append(s)
-        result = "\n".join(en_lines).strip()
-    return result if result else full_text
 
 def _esc(t: str) -> str:
-    return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return (str(t)
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;"))
+
+
+def extract_display_text(text: str, bangla_query: str = "") -> str:
+    """Extract the most relevant portion of a stored hadith text blob."""
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    return "\n".join(lines)
+
+
+BOOK_BN = {
+    "Sahih_Bukhari":    "সহীহ বুখারী",
+    "Sahih_Muslim":     "সহীহ মুসলিম",
+    "Sunan_Abu_Dawud":  "সুনান আবু দাউদ",
+    "Jami_at_Tirmidhi": "জামে আত-তিরমিযী",
+    "Sunan_an_Nasai":   "সুনান আন-নাসায়ী",
+    "Sunan_Ibn_Majah":  "সুনান ইবনে মাজাহ",
+    "Riyad_as_Salihin": "রিয়াদুস সালিহীন",
+}
+BOOKS_LIST = list(BOOK_BN.items())
+# Books offered in Hadith Books (Riyad as-Salihin is excluded by request).
+HADITH_BOOKS_EXCLUDED = {"Riyad_as_Salihin"}
+HADITH_BOOKS = {k: v for k, v in BOOK_BN.items() if k not in HADITH_BOOKS_EXCLUDED}
+
 
 def book_display(raw: str) -> str:
-    return raw.replace("_", " ").replace("Sahih ", "Ṣaḥīḥ ")
-
-def similarity_badge(score: float) -> str:
-    cls = "badge-high" if score >= 75 else ("badge-mid" if score >= 55 else "badge-low")
-    return f'<span class="result-badge {cls}">● {score:.1f}%</span>'
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Theme CSS
-# ─────────────────────────────────────────────────────────────────────────────
-THEME_CSS = """
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@300;400;500;600;700&family=Cinzel:wght@400;600;700&family=Inter:wght@300;400;500;600;700&display=swap');
-
-*,*::before,*::after{box-sizing:border-box}
-html,body,[class*="css"]{font-family:'Inter','Noto Sans Bengali',sans-serif!important}
-
-.stApp{
-  background:
-    radial-gradient(ellipse at 20% 20%, rgba(120,80,255,.18) 0%, transparent 50%),
-    radial-gradient(ellipse at 80% 80%, rgba(20,150,220,.15) 0%, transparent 50%),
-    linear-gradient(160deg,#070714 0%,#0c0c2a 35%,#08101e 70%,#0a0a1a 100%)!important;
-  min-height:100vh!important}
-#MainMenu,footer,header{visibility:hidden}
-.block-container{padding-top:1.25rem!important;padding-bottom:3rem!important;max-width:1200px!important}
-
-[data-testid="stSidebar"]{
-  background:rgba(8,6,28,.85)!important;
-  backdrop-filter:blur(24px)!important;
-  -webkit-backdrop-filter:blur(24px)!important;
-  border-right:1px solid rgba(180,140,255,.14)!important;
-  box-shadow:4px 0 40px rgba(0,0,0,.6)!important}
-
-/* Streamlit 1.58 sidebar inner div hierarchy */
-[data-testid="stSidebar"]>div,
-[data-testid="stSidebar"]>div>div,
-[data-testid="stSidebar"] section,
-[data-testid="stSidebarContent"],
-[data-testid="stSidebarUserContent"],
-section[data-testid="stSidebar"]>div{
-  background:transparent!important}
-
-/* Force all sidebar text to be visible */
-[data-testid="stSidebar"] p,
-[data-testid="stSidebar"] span,
-[data-testid="stSidebar"] label,
-[data-testid="stSidebar"] div,
-[data-testid="stSidebar"] small,
-[data-testid="stSidebar"] h1,
-[data-testid="stSidebar"] h2,
-[data-testid="stSidebar"] h3{
-  color:#c4b5fd!important}
-
-[data-testid="stSidebar"] [data-testid="stMetricValue"]{color:#e2d9ff!important;font-size:1.4rem!important}
-[data-testid="stSidebar"] [data-testid="stMetricLabel"]{color:#8b7bb5!important}
-[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"]{
-  background:rgba(167,139,250,.06)!important;
-  border:1px dashed rgba(167,139,250,.3)!important;
-  border-radius:10px!important}
-[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] p,
-[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] span{
-  color:#8b7bb5!important}
-/* Sidebar scrollbar */
-[data-testid="stSidebar"] ::-webkit-scrollbar-thumb{
-  background:rgba(167,139,250,.25)!important}
-
-.fancy-divider{height:1px;background:linear-gradient(90deg,transparent,rgba(200,160,80,.4),rgba(167,139,250,.5),rgba(200,160,80,.4),transparent);margin:1.25rem 0}
-
-.hero-banner{
-  background:radial-gradient(ellipse at 50% 0%,rgba(200,160,50,.12) 0%,transparent 60%),linear-gradient(135deg,rgba(30,20,70,.8) 0%,rgba(50,40,130,.6) 50%,rgba(20,50,90,.8) 100%);
-  backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
-  border:1px solid rgba(200,160,50,.3);border-radius:20px;
-  padding:2.75rem 2rem 2.25rem;margin-bottom:2rem;text-align:center;
-  position:relative;overflow:hidden;
-  box-shadow:0 8px 40px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.05)}
-.hero-banner::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;
-  background:linear-gradient(90deg,transparent,rgba(200,160,50,.8),rgba(255,215,100,.9),rgba(200,160,50,.8),transparent)}
-.hero-banner::after{content:'';position:absolute;top:-60%;left:-50%;width:200%;height:200%;
-  background:radial-gradient(ellipse at center,rgba(167,139,250,.06) 0%,transparent 60%);
-  animation:pulse-glow 5s ease-in-out infinite;pointer-events:none}
-@keyframes pulse-glow{0%,100%{opacity:.4;transform:scale(.95)}50%{opacity:1;transform:scale(1.05)}}
-.hero-title{
-  font-family:'Cinzel','Inter',serif!important;font-size:2.2rem;font-weight:700;
-  background:linear-gradient(135deg,#f0c060,#a78bfa,#60c0f0,#a78bfa,#f0c060);background-size:300% 300%;
-  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
-  margin:0 0 .5rem;position:relative;z-index:1;animation:shimmer 6s ease-in-out infinite}
-@keyframes shimmer{0%,100%{background-position:0% 50%}50%{background-position:100% 50%}}
-.hero-arabic{font-size:1.3rem;color:rgba(200,160,50,.8);letter-spacing:.1em;margin-bottom:.4rem;position:relative;z-index:1}
-.hero-subtitle{color:#94a3b8;font-size:.95rem;position:relative;z-index:1}
-
-.stat-row{display:flex;gap:.65rem;flex-wrap:wrap;margin-bottom:1.5rem}
-.stat-pill{background:rgba(167,139,250,.1);border:1px solid rgba(167,139,250,.2);border-radius:50px;padding:.35rem .9rem;font-size:.82rem;color:#c4b5fd;font-weight:500;backdrop-filter:blur(6px)}
-
-.result-card{
-  background:rgba(255,255,255,.04);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
-  border:1px solid rgba(255,255,255,.08);border-radius:16px;
-  padding:1.25rem 1.5rem;margin-bottom:.85rem;transition:all .25s ease;position:relative;overflow:hidden}
-.result-card::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;
-  background:linear-gradient(90deg,transparent,rgba(200,160,50,.3),transparent);opacity:0;transition:opacity .25s}
-.result-card:hover{border-color:rgba(167,139,250,.35);background:rgba(255,255,255,.06);
-  box-shadow:0 4px 20px rgba(0,0,0,.3);transform:translateY(-1px)}
-.result-card:hover::before{opacity:1}
-.result-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem;flex-wrap:wrap;gap:.5rem}
-.result-badge{display:inline-flex;align-items:center;gap:.35rem;font-size:.8rem;font-weight:600;padding:.25rem .75rem;border-radius:50px;backdrop-filter:blur(8px)}
-.badge-high{background:rgba(16,185,129,.15);color:#34d399;border:1px solid rgba(16,185,129,.35);box-shadow:0 0 10px rgba(16,185,129,.2)}
-.badge-mid{background:rgba(245,158,11,.12);color:#fbbf24;border:1px solid rgba(245,158,11,.3)}
-.badge-low{background:rgba(249,115,22,.12);color:#fb923c;border:1px solid rgba(249,115,22,.3)}
-.result-meta{display:flex;gap:.6rem;flex-wrap:wrap;margin-bottom:.85rem}
-.meta-tag{font-size:.73rem;color:#64748b;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.06);padding:.2rem .6rem;border-radius:6px}
-.meta-tag span{color:#94a3b8;font-weight:500}
-.hadith-body{
-  font-family:'Noto Sans Bengali','Kalpurush',sans-serif!important;
-  font-size:.97rem;line-height:2.1;color:#ddd6fe;
-  padding:1rem 1.25rem;background:rgba(0,0,0,.25);
-  border-left:3px solid rgba(200,160,50,.5);border-radius:0 10px 10px 0;
-  white-space:pre-wrap;word-break:break-word;overflow:visible}
-
-.chat-answer{
-  background:rgba(100,50,200,.07);border:1px solid rgba(124,58,237,.2);
-  backdrop-filter:blur(12px);border-radius:16px 16px 16px 4px;
-  padding:1.25rem 1.5rem;margin-bottom:1rem;
-  font-family:'Noto Sans Bengali','Inter',sans-serif!important;
-  font-size:1rem;line-height:1.95;color:#e2e8f0;white-space:pre-wrap}
-.chat-user{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);
-  backdrop-filter:blur(8px);border-radius:16px 16px 4px 16px;
-  padding:.75rem 1.1rem;margin-bottom:.5rem;font-size:.95rem;color:#cbd5e1;text-align:right}
-.chat-bot-wrap{margin-bottom:1.75rem}
-.source-strip{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.75rem}
-.src-chip{display:inline-flex;align-items:center;gap:.3rem;background:rgba(167,139,250,.08);
-  border:1px solid rgba(167,139,250,.25);border-radius:50px;padding:.2rem .75rem;
-  font-size:.73rem;color:#c4b5fd;cursor:pointer;transition:all .2s;backdrop-filter:blur(6px)}
-.src-chip:hover{background:rgba(167,139,250,.2);border-color:rgba(167,139,250,.5)}
-.source-hadith{background:rgba(16,185,129,.04);border:1px solid rgba(16,185,129,.15);border-radius:12px;padding:1rem 1.25rem;margin:.5rem 0 1rem}
-
-.stTextInput input,[data-testid="stNumberInputField"],[data-baseweb="input"] input{
-  background:rgba(255,255,255,.04)!important;border:1px solid rgba(167,139,250,.3)!important;
-  border-radius:10px!important;color:#e2e8f0!important;caret-color:#a78bfa!important;
-  font-size:.95rem!important;font-family:'Noto Sans Bengali','Inter',sans-serif!important;
-  padding:.65rem 1rem!important;transition:border-color .2s,box-shadow .2s,background .2s!important}
-.stTextInput input:focus,[data-testid="stNumberInputField"]:focus{
-  border-color:#a78bfa!important;background:rgba(255,255,255,.07)!important;box-shadow:0 0 0 3px rgba(167,139,250,.12)!important}
-[data-testid="stNumberInputContainer"]{background:rgba(255,255,255,.04)!important;border:1px solid rgba(167,139,250,.3)!important;border-radius:10px!important}
-[data-testid="stNumberInput"] button{color:#a78bfa!important}
-[data-testid="stSelectbox"]>div>div{background:rgba(255,255,255,.04)!important;border:1px solid rgba(167,139,250,.3)!important;border-radius:10px!important;color:#e2e8f0!important}
-div[data-testid="stColumn"]:has(>.stVerticalBlock>.stElementContainer>.stButton){display:flex!important;flex-direction:column!important;justify-content:flex-end!important}
-.stButton>button{background:linear-gradient(135deg,#7c3aed,#4f46e5)!important;color:#fff!important;border:none!important;border-radius:10px!important;font-weight:600!important;font-size:.9rem!important;box-shadow:0 4px 15px rgba(124,58,237,.3)!important;transition:all .2s!important;height:42px!important}
-.stButton>button:hover{opacity:.9!important;transform:translateY(-1px)!important;box-shadow:0 6px 20px rgba(124,58,237,.45)!important}
-.stButton>button[kind="secondary"]{background:rgba(255,255,255,.06)!important;box-shadow:none!important;border:1px solid rgba(255,255,255,.1)!important}
-[data-testid="stRadio"] label{color:#94a3b8!important}
-.stTabs [data-baseweb="tab-list"]{background:rgba(255,255,255,.03)!important;backdrop-filter:blur(10px)!important;border-radius:12px!important;padding:4px!important;gap:4px!important;border-bottom:none!important;border:1px solid rgba(255,255,255,.06)!important}
-.stTabs [data-baseweb="tab"]{border-radius:9px!important;font-weight:500!important;padding:.5rem 1.25rem!important;background:transparent!important;border:none!important;color:#64748b!important}
-.stTabs [aria-selected="true"]{background:linear-gradient(135deg,#7c3aed,#4f46e5)!important;color:#fff!important;box-shadow:0 2px 12px rgba(124,58,237,.4)!important}
-.stTabs [data-baseweb="tab-panel"]{padding-top:1.5rem!important}
-[data-testid="stMetricValue"]{color:#a78bfa!important;font-size:1.5rem!important}
-[data-testid="stMetricLabel"]{color:#64748b!important}
-[data-testid="stProgressBar"]>div{background:linear-gradient(90deg,#7c3aed,#a78bfa,#38bdf8)!important;border-radius:4px!important}
-[data-testid="stExpander"]{background:rgba(255,255,255,.03)!important;border:1px solid rgba(255,255,255,.07)!important;border-radius:10px!important}
-[data-testid="stExpander"] summary{color:#94a3b8!important}
-::-webkit-scrollbar{width:5px;height:5px}
-::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:linear-gradient(180deg,rgba(167,139,250,.4),rgba(56,189,248,.3));border-radius:3px}
-.section-label{font-size:.68rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#4a4470;margin-bottom:.75rem}
-.lookup-result{background:rgba(16,185,129,.04);border:1px solid rgba(16,185,129,.18);backdrop-filter:blur(10px);border-radius:14px;padding:1.25rem 1.5rem;margin-top:.75rem}
-.empty-state{text-align:center;padding:3rem 2rem}
-.empty-state .icon{font-size:3.5rem;margin-bottom:.75rem;filter:drop-shadow(0 0 12px rgba(167,139,250,.4))}
-.empty-state p{font-size:.95rem;color:#3d3660;line-height:1.6}
-.sidebar-brand{text-align:center;padding:1.5rem .5rem 1rem}
-.sidebar-brand .mosque-icon{font-size:3rem;filter:drop-shadow(0 0 16px rgba(200,160,50,.5));display:block;margin-bottom:.5rem}
-.sidebar-brand .app-name{font-family:'Cinzel',serif!important;font-size:1.15rem;font-weight:600;background:linear-gradient(135deg,#f0c060,#a78bfa);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-.sidebar-brand .app-sub{font-size:.72rem;color:#4a4470;letter-spacing:.08em;margin-top:.2rem}
-
-/* ── Native sidebar collapse button — hidden (we use custom ☰ toggle instead) */
-[data-testid="stSidebarCollapseButton"],
-[data-testid="collapsedControl"],
-button[kind="header"][aria-label="Close sidebar"],
-button[aria-label="Close sidebar"],
-[data-testid="stSidebar"] button[kind="header"]{
-  display:none!important;visibility:hidden!important}
-.book-pill{display:inline-block;background:rgba(167,139,250,.1);border:1px solid rgba(167,139,250,.2);border-radius:50px;padding:.2rem .65rem;font-size:.71rem;color:#9d8fd4;margin:.15rem}
-.ai-status-on{display:flex;align-items:center;gap:.4rem;background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2);border-radius:8px;padding:.4rem .75rem;font-size:.75rem;color:#34d399}
-.ai-status-warn{display:flex;align-items:center;gap:.4rem;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);border-radius:8px;padding:.4rem .75rem;font-size:.75rem;color:#fbbf24}
-.ai-status-off{display:flex;align-items:center;gap:.4rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:8px;padding:.4rem .75rem;font-size:.75rem;color:#f87171}
-</style>
-"""
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Page config
-# ─────────────────────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="Hadith QA · Islamic Knowledge Search",
-    page_icon="🕌", layout="wide",
-    initial_sidebar_state="expanded",
-)
-st.markdown(THEME_CSS, unsafe_allow_html=True)
-
-# Clear any stored collapsed state so sidebar always opens
-st.markdown("""
-<script>
-(function() {
-  try {
-    // Remove Streamlit's stored sidebar state so it always opens expanded
-    const keys = Object.keys(localStorage);
-    keys.forEach(k => {
-      if (k.includes('sidebar') || k.includes('Sidebar')) {
-        localStorage.removeItem(k);
-      }
-    });
-    // Also clear sessionStorage
-    const skeys = Object.keys(sessionStorage);
-    skeys.forEach(k => {
-      if (k.includes('sidebar') || k.includes('Sidebar')) {
-        sessionStorage.removeItem(k);
-      }
-    });
-  } catch(e) {}
-})();
-</script>
-""", unsafe_allow_html=True)
+    """Return the Bangla display name for a book key."""
+    c = raw.replace(" ", "_")
+    if c in BOOK_BN:
+        return BOOK_BN[c]
+    for k, v in BOOK_BN.items():
+        if k.lower() in raw.lower():
+            return v
+    return raw.replace("_", " ")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Cached loaders
-# ─────────────────────────────────────────────────────────────────────────────
+def _hadith_to_dict(h: dict) -> dict:
+    meta = h.get("metadata", {})
+    return {
+        "hadith_id": h.get("hadith_id", meta.get("hadith_id", "?")),
+        "book":      h.get("book",      meta.get("book", "Unknown")),
+        "narrator":  h.get("narrator",  meta.get("narrator", "")),
+        "grade":     h.get("grade",     meta.get("grade", "")) or "",
+        "text":      h.get("text", ""),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Backend loaders  (cached singletons, never modified)
+# ═══════════════════════════════════════════════════════════════════════════
 @st.cache_resource(show_spinner=False)
 def load_query_cache():
     from query_cache import QueryCache
     return QueryCache()
 
+
 @st.cache_resource(show_spinner=False)
 def load_hadith_engine():
-    app_dir = str(Path(__file__).parent.absolute())
-    if app_dir not in sys.path:
-        sys.path.insert(0, app_dir)
     from hybrid_search import HybridHadithSearch
     db_path = str(Path(__file__).parent.parent / "data" / "hadith_vectors")
-    return HybridHadithSearch(hadith_db_path=db_path, use_reranker=True)
+    return HybridHadithSearch(hadith_db_path=db_path, use_reranker=False)
+
 
 @st.cache_resource(show_spinner=False)
 def load_doc_components():
-    from ingest import DocumentIngestor
-    from embed import EmbeddingModel
-    from vector_store import VectorStore
-    from search import SearchEngine
-    vs = VectorStore(); em = EmbeddingModel()
-    di = DocumentIngestor(); se = SearchEngine(vs, em)
-    return vs, em, di, se
+    """Lazy-load document Q&A components (hidden route ?view=docs)."""
+    try:
+        from ingest import load_documents  # noqa: F401
+        return True
+    except Exception:
+        return False
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Sidebar
-# ─────────────────────────────────────────────────────────────────────────────
-def render_sidebar(hadith_stats):
-    with st.sidebar:
-        st.markdown("""
-<div class="sidebar-brand">
-  <span class="mosque-icon">🕌</span>
-  <div class="app-name">Hadith QA</div>
-  <div class="app-sub">✦ Islamic Knowledge Search ✦</div>
-</div>""", unsafe_allow_html=True)
-        st.markdown('<div class="fancy-divider"></div>', unsafe_allow_html=True)
-        if hadith_stats:
-            total = hadith_stats.get("total_hadiths", 0)
-            avg   = hadith_stats.get("avg_words_per_hadith", 0)
-            books = hadith_stats.get("books", [])
-            st.markdown('<p class="section-label">📊 Hadith Database</p>', unsafe_allow_html=True)
-            c1, c2 = st.columns(2)
-            c1.metric("Hadiths", f"{total:,}")
-            c2.metric("Avg Words", avg)
-            if books:
-                pills = "".join(
-                    f'<span class="book-pill">{book_display(b)}</span>' for b in books)
-                st.markdown(f'<div style="margin-top:.5rem;">{pills}</div>', unsafe_allow_html=True)
-        st.markdown('<div class="fancy-divider"></div>', unsafe_allow_html=True)
+# ═══════════════════════════════════════════════════════════════════════════
+# Session state initialisation
+# ═══════════════════════════════════════════════════════════════════════════
+def _init_session_state() -> None:
+    defaults = {
+        "view":            "chat",
+        "chat_history":    [],
+        "chat_sources":    {},
+        "feedback_votes":  {},
+        "h_book":          "Sahih_Bukhari",
+        "h_query":         "",
+        "h_loaded":        0,
+        "h_results":       [],
+        "h_jump_result":   None,
+        "_pending_ask":    "",
+        "_stream_error":   False,
+        "_retry_question": "",
+        "_hero_question":  "",
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
 
-        import os as _os
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Query-param sync
+# ═══════════════════════════════════════════════════════════════════════════
+def _sync_query_params() -> None:
+    """Mirror st.session_state["view"] ↔ st.query_params["view"].
+    Also reads ?_q= from the hero iframe submit (query-param relay).
+    """
+    try:
+        # --- view param ---
+        qp_view = st.query_params.get("view", "")
+        if qp_view in ("chat", "hadith", "docs"):
+            if st.session_state["view"] != qp_view:
+                st.session_state["view"] = qp_view
+        else:
+            st.query_params["view"] = st.session_state["view"]
+
+        # --- _q param: question submitted from the hero iframe ---
+        qp_q = st.query_params.get("_q", "").strip()
+        if qp_q:
+            # Store as pending question, clear the param so it only fires once
+            st.session_state["_hero_question"] = qp_q
+            del st.query_params["_q"]
+    except Exception:
+        pass
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Hadith search cache helper
+# ═══════════════════════════════════════════════════════════════════════════
+@st.cache_data(show_spinner=False)
+def _cached_hadith_search(_engine, query: str, book: str) -> list:
+    """Wrap engine.search_hadiths in st.cache_data.
+
+    Fetches extra candidates so that, after hiding excluded books, the page
+    still gets the top SEARCH_TOP_K results.
+    """
+    raw = _engine.search_hadiths(
+        query, top_k=SEARCH_TOP_K + 10, use_reframing=True, extra_keys_raw=""
+    )
+    out = [
+        _hadith_to_dict(h) for h in raw
+        if str(h.get("book", "")).replace(" ", "_") not in HADITH_BOOKS_EXCLUDED
+    ]
+    return out[:SEARCH_TOP_K]
+
+
+SEARCH_TOP_K = 15  # results shown on the Hadith Books search page
+
+
+# ── Hadith-reference questions ("<বই> <n> নম্বর হাদীস …") ────────────────────
+# Spelling variants users type for each book (longest first when matching).
+_BOOK_ALIASES = {
+    "Sahih_Bukhari":    ["সহীহ বুখারী", "সহিহ বুখারী", "সহীহ বুখারি", "বুখারী", "বুখারি", "bukhari"],
+    "Sahih_Muslim":     ["সহীহ মুসলিম", "সহিহ মুসলিম", "মুসলিম", "muslim"],
+    "Jami_at_Tirmidhi": ["জামে আত-তিরমিযী", "জামে তিরমিযী", "তিরমিযী", "তিরমিজি", "তিরমিযি", "tirmidhi"],
+    "Sunan_Abu_Dawud":  ["সুনান আবু দাউদ", "সুনান আবূ দাঊদ", "আবু দাউদ", "আবূ দাঊদ", "আবু দাঊদ", "abu dawud"],
+    "Sunan_Ibn_Majah":  ["সুনান ইবনে মাজাহ", "সুনান ইবনু মাজাহ", "ইবনে মাজাহ", "ইবনু মাজাহ", "ইবনে মাজা", "ibn majah"],
+    "Sunan_an_Nasai":   ["সুনান আন-নাসায়ী", "সুনান নাসায়ী", "নাসায়ী", "নাসাঈ", "নাসাই", "nasai"],
+    "Riyad_as_Salihin": ["রিয়াদুস সালিহীন", "রিয়াদুস সালেহীন", "riyad"],
+}
+_BN_TO_LATIN = str.maketrans("০১২৩৪৫৬৭৮৯", "0123456789")
+_NEIGHBOURS = 2  # hadiths before and after the asked one (up to 5 total)
+
+
+def _parse_hadith_reference(q: str):
+    """Return (book_key, number) if q names a book and a hadith number, else None.
+
+    The number must come after the book name, e.g. "সহীহ বুখারী 1 নম্বর
+    হাদীস", "বুখারী ১ নং হাদিস", "Bukhari 52".  Bangla digits are accepted.
+    """
+    text = q.translate(_BN_TO_LATIN)
+    low = text.lower()
+    best = None  # (position, -len(alias), book_key, alias)
+    for key, aliases in _BOOK_ALIASES.items():
+        for alias in aliases:
+            pos = low.find(alias.lower())
+            if pos >= 0:
+                cand = (pos, -len(alias), key, alias)
+                if best is None or cand < best:
+                    best = cand
+    if best is None:
+        return None
+    pos, neg_len, key, _ = best
+    after = text[pos - neg_len:]
+    m = _re.match(r"\s*(?:এর|-এর|,)?\s*(?:হাদীস|হাদিস|hadith|#|no\.?)?\s*(\d{1,5})\b", after, _re.I)
+    if not m:
+        return None
+    n = int(m.group(1))
+    return (key, n) if n > 0 else None
+
+
+def _hadith_reference_context(q: str, engine) -> list:
+    """Hadith n of the named book first, then up to 2 neighbours each side.
+
+    Returned dicts use the same fields as engine.search_hadiths results so
+    synthesize_answer_stream can use them unchanged.  Empty list if q is not
+    a hadith reference or the hadith is not in the database.
+    """
+    ref = _parse_hadith_reference(q)
+    if not ref:
+        return []
+    book, n = ref
+
+    def _get(num):
         try:
-            from gemini_client import get_active_key_count, get_gemini_status
-            if get_active_key_count() == 1:
-                st.markdown('<div class="ai-status-on">🤖 AI powered · Vertex AI active</div>', unsafe_allow_html=True)
-            else:
-                st.markdown('<div class="ai-status-off">⚠️ Vertex AI not configured</div>', unsafe_allow_html=True)
+            h = engine.get_hadith_by_number(num, book=book)
         except Exception:
-            st.markdown('<div class="ai-status-off">⚠️ Vertex AI unavailable</div>', unsafe_allow_html=True)
-        # gemini_keys_raw kept in session state for backward-compat with call sites;
-        # it is ignored by the new gemini_client but avoids KeyError elsewhere.
-        st.session_state["gemini_keys_raw"] = ""
+            return None
+        if not h:
+            return None
+        meta = h.get("metadata") or {}
+        return {
+            "hadith_id":  str(h.get("hadith_id", num)),
+            "book":       h.get("book", book),
+            "narrator":   meta.get("narrator", ""),
+            "grade":      meta.get("grade", "") or "",
+            "text":       h.get("text", ""),
+            # High scores so the >=40 relevance filter keeps all of them;
+            # the asked hadith stays first and becomes source [1].
+            "similarity": 100 if num == n else 90 - abs(num - n),
+        }
 
-        st.markdown('<div class="fancy-divider"></div>', unsafe_allow_html=True)
-        st.markdown('<p class="section-label">📄 Upload Documents</p>', unsafe_allow_html=True)
-        return st.file_uploader("PDF or TXT", type=["pdf","txt"],
-                                accept_multiple_files=True, label_visibility="collapsed")
+    target = _get(n)
+    if target is None:
+        return []
+    out = [target]
+    for d in range(1, _NEIGHBOURS + 1):
+        for num in (n - d, n + d):
+            if num > 0:
+                h = _get(num)
+                if h:
+                    out.append(h)
+    return out
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Hadith card
-# ─────────────────────────────────────────────────────────────────────────────
-def _sigmoid(x: float) -> float:
-    """Sigmoid function to map cross-encoder logits to [0, 1]."""
-    import math
-    return 1.0 / (1.0 + math.exp(-x))
+def _bn_digits(n: int) -> str:
+    """Convert integer to Bangla-digit string (fix item 8: Bangla digits for counts)."""
+    try:
+        return str(n).translate(str.maketrans("0123456789", "০১২৩৪৫৬৭৮৯"))
+    except Exception:
+        return str(n)
 
 
-def render_hadith_card(hadith: dict, idx: int, bangla_query: bool,
-                       score_override: float = None, score_label: str = None):
-    rerank_raw   = hadith.get("rerank_score")   # raw cross-encoder logit (unbounded)
-    dense_sim    = hadith.get("similarity", 0)  # dense embedding similarity %
-    rrf_score    = hadith.get("rrf_score", 0)   # RRF fusion score (×1000)
+# ═══════════════════════════════════════════════════════════════════════════
+# Chat flow
+# ═══════════════════════════════════════════════════════════════════════════
+def _handle_question(q: str, engine, qcache) -> None:
+    """Cache-first chat flow (Feature 4).
 
-    if score_override is not None:
-        display_score = score_override
-        label = score_label or "score"
-        extra_scores = ""
-    elif rerank_raw is not None:
-        # Sigmoid-normalise the raw logit → meaningful [0–100]% probability
-        display_score = _sigmoid(rerank_raw) * 100
-        label = "hybrid"
-        # Sub-scores shown in meta row
-        extra_scores = (
-            f'<span class="meta-tag" title="Dense embedding similarity">💠 <span>{dense_sim:.1f}%</span></span>'
-            f'<span class="meta-tag" title="RRF fusion score">⚡ <span>{rrf_score:.2f}</span></span>'
+    Order: qcache.get → hit: render; miss: search → stream → qcache.set
+    """
+    from hadith_chat import synthesize_answer_stream
+    from feedback import log_vote  # noqa: imported here to avoid circular at module level
+
+    # 1. Cache lookup FIRST (fixes the old bug where retrieval ran first)
+    cache_hit = qcache.get(q)
+
+    # Append user message
+    st.session_state.chat_history.append(
+        {"role": "user", "content": q, "cached": False, "error": False}
+    )
+
+    if cache_hit:
+        # ── Cache HIT ────────────────────────────────────────────────────
+        answer, sources = cache_hit
+        msg_idx = len(st.session_state.chat_history)
+        st.session_state.chat_history.append(
+            {"role": "assistant", "content": answer, "cached": True, "error": False}
         )
-    else:
-        display_score = dense_sim
-        label = "sim"
-        extra_scores = ""
+        st.session_state.chat_sources[msg_idx] = sources
+        st.session_state.feedback_votes.setdefault(msg_idx, None)
+        st.rerun()
+        return
 
-    book     = book_display(hadith.get("book", "Unknown"))
-    hid      = hadith.get("hadith_id", "?")
-    words    = hadith.get("word_count", 0)
-    grade    = hadith.get("grade", "")
-    narrator = hadith.get("narrator", "")
-    raw_text = hadith.get("text", "")
-    display  = extract_display_text(raw_text, bangla_query)
-    badge    = similarity_badge(display_score)
+    # ── Cache MISS: retrieve → stream → store ────────────────────────────
+    msg_idx = len(st.session_state.chat_history)
 
-    meta = (f'<span class="meta-tag">📚 <span>{_esc(book)}</span></span>'
-            f'<span class="meta-tag"># <span>{_esc(str(hid))}</span></span>'
-            f'<span class="meta-tag">📝 <span>{words} w</span></span>'
-            f'{extra_scores}')
-    if grade:
-        meta += f'<span class="meta-tag">⭐ <span>{_esc(grade)}</span></span>'
-    if narrator:
-        short = narrator[:55]+"…" if len(narrator)>55 else narrator
-        meta += f'<span class="meta-tag">👤 <span>{_esc(short)}</span></span>'
+    # Show the user's question immediately (before the slow retrieval),
+    # so the UI reacts the moment the question is sent.
+    st.markdown(
+        html_block(
+            f'<div class="iq-msg-user"><p class="iq-bubble">{_esc(q)}</p></div>'
+        ),
+        unsafe_allow_html=True,
+    )
 
-    # Badge label suffix
-    badge_label = f'<span style="color:#64748b;font-size:.72rem;margin-left:.3rem;">{label}</span>'
+    # Typing indicator + status line while retrieval runs (can take a while
+    # on the first question, when the model and BM25 index are loaded).
+    typing_placeholder = st.empty()
+    typing_placeholder.markdown(
+        html_block(
+            '<div class="iq-msg-ai">'
+            '<div class="iq-avatar">✦</div>'
+            '<div class="iq-ai-body">'
+            + typing_dots_html() +
+            '<span class="iq-status">হাদীস খোঁজা হচ্ছে…</span>'
+            '</div></div>'
+        ),
+        unsafe_allow_html=True,
+    )
 
+    try:
+        # Question about a specific hadith ("সহীহ বুখারী 1 নম্বর হাদীস…"):
+        # give the model that hadith plus its neighbours instead of a
+        # semantic search, which does not find a hadith by its number.
+        raw = _hadith_reference_context(q, engine)
+        if not raw:
+            raw = engine.search_hadiths(q, top_k=30, use_reframing=True, extra_keys_raw="")
+    except Exception:
+        typing_placeholder.empty()
+        st.session_state.chat_history.append(
+            {"role": "assistant", "content": "", "cached": False, "error": True}
+        )
+        st.session_state["_stream_error"] = True
+        st.session_state["_retry_question"] = q
+        st.rerun()
+        return
+
+    chunk_iter, sources = synthesize_answer_stream(q, raw)
+
+    # Update the status line: retrieval done, waiting for the first token.
+    typing_placeholder.markdown(
+        html_block(
+            '<div class="iq-msg-ai">'
+            '<div class="iq-avatar">✦</div>'
+            '<div class="iq-ai-body">'
+            + typing_dots_html() +
+            '<span class="iq-status">উত্তর লেখা হচ্ছে…</span>'
+            '</div></div>'
+        ),
+        unsafe_allow_html=True,
+    )
+
+    def _until_first_token(it):
+        """Keep the typing dots until the first chunk, then remove them."""
+        first = True
+        for chunk in it:
+            if first:
+                typing_placeholder.empty()
+                first = False
+            yield chunk
+        if first:  # stream produced nothing
+            typing_placeholder.empty()
+
+    # Stream via st.write_stream, next to the AI avatar
     with st.container():
-        st.markdown(
-            f'<div class="result-card">'
-            f'<div class="result-header">'
-            f'<span style="color:#94a3b8;font-size:.8rem;font-weight:600">#{idx}</span>'
-            f'{badge}{badge_label}'
-            f'</div>'
-            f'<div class="result-meta">{meta}</div>'
-            f'<div class="hadith-body">{_esc(display)}</div>'
-            f'</div>', unsafe_allow_html=True)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Tab 1 — Hadith Search
-# ─────────────────────────────────────────────────────────────────────────────
-def hadith_search_tab(engine):
-    st.markdown('<p class="section-label">🔍 Semantic Search</p>', unsafe_allow_html=True)
-
-    # ── Search mode selector ──────────────────────────────────────────────────
-    search_mode = st.radio(
-        "search_mode",
-        options=["🚀 Hybrid  (BM25 + Dense + RRF + Re-rank)", "⚡ Simple  (Dense only)"],
-        index=0,
-        horizontal=True,
-        label_visibility="collapsed",
-        key="hadith_search_mode",
-    )
-    use_hybrid = search_mode.startswith("🚀")
-    st.markdown(
-        f'<p style="color:#64748b;font-size:.75rem;margin-top:-.5rem;margin-bottom:.75rem;">'
-        f'{"BM25 · Dense · RRF · Cross-Encoder re-ranking · Query reframing" if use_hybrid else "Fine-tuned e5 bi-encoder · Query reframing · Fast"}'
-        f'</p>',
-        unsafe_allow_html=True,
-    )
-
-    query = st.text_input("q", placeholder="নামাজ সম্পর্কে হাদিস  ·  Search for prayer, fasting …",
-                          label_visibility="collapsed", key="hadith_query")
-    col_k, col_btn = st.columns([1, 3])
-    with col_k:
-        top_k = st.number_input("k", min_value=5, max_value=30, value=15,
-                                label_visibility="collapsed", key="hadith_k")
-    with col_btn:
-        go = st.button("🔍  Search Hadiths", type="primary",
-                       use_container_width=True, key="hadith_go")
-
-    if go and query.strip():
-        bangla = is_bangla(query)
-        spinner_msg = "Searching (hybrid pipeline)…" if use_hybrid else "Searching…"
-        with st.spinner(spinner_msg):
-            try:
-                gemini_keys = st.session_state.get("gemini_keys_raw", "")
-                if use_hybrid:
-                    results = engine.search_hadiths(
-                        query.strip(), top_k=int(top_k),
-                        use_reframing=True, extra_keys_raw=gemini_keys)
-                else:
-                    # Simple dense-only: use HadithSearchEngine directly
-                    from hadith_search import HadithSearchEngine
-                    if "simple_engine" not in st.session_state:
-                        st.session_state["simple_engine"] = HadithSearchEngine()
-                    results = st.session_state["simple_engine"].search_hadiths(
-                        query.strip(), top_k=int(top_k),
-                        use_reframing=True, extra_keys_raw=gemini_keys)
-            except Exception as e:
-                st.error(f"Search failed: {e}"); return
-
-        if not results:
-            st.markdown('<div class="empty-state"><div class="icon">🔭</div>'
-                        '<p>No hadiths matched. Try different keywords.</p></div>',
-                        unsafe_allow_html=True)
-        else:
-            lang      = "বাংলা" if bangla else "English"
-            retrieval = results[0].get("_retrieval", "dense") if results else "dense"
-            st.markdown(f'<div class="stat-row">'
-                        f'<span class="stat-pill">✨ {len(results)} results</span>'
-                        f'<span class="stat-pill">🌐 {_esc(lang)}</span>'
-                        f'<span class="stat-pill">🔍 &ldquo;{_esc(query[:55])}&rdquo;</span>'
-                        f'<span class="stat-pill">⚙️ {_esc(retrieval)}</span>'
-                        f'</div>', unsafe_allow_html=True)
-            for i, h in enumerate(results, 1):
-                render_hadith_card(h, i, bangla)
-    elif not go:
-        st.markdown('<div class="empty-state"><div class="icon">🕌</div>'
-                    '<p>Enter a query to search across <strong style="color:#a78bfa">35,809 hadiths</strong><br>'
-                    'in Bangla or English · Bukhari · Muslim · Tirmidhi · Abu Dawud · Ibn Majah · Nasai · Nawawi</p></div>',
-                    unsafe_allow_html=True)
-
-    st.markdown('<div class="fancy-divider"></div>', unsafe_allow_html=True)
-    st.markdown('<p class="section-label">🔢 Direct Lookup by Number</p>', unsafe_allow_html=True)
-
-    BOOKS = {"Ṣaḥīḥ al-Bukhārī":   "Sahih_Bukhari",
-             "Ṣaḥīḥ Muslim":        "Sahih_Muslim",
-             "Jāmiʿ at-Tirmidhī":   "Jami_at_Tirmidhi",
-             "Sunan Abī Dāwūd":     "Sunan_Abu_Dawud",
-             "Sunan Ibn Mājah":      "Sunan_Ibn_Majah",
-             "Sunan an-Nasāʾī":      "Sunan_an_Nasai",
-             "Riyāḍ aṣ-Ṣāliḥīn":   "Riyad_as_Salihin"}
-    col_b, col_n, col_lb = st.columns([3, 2, 2])
-    with col_b:
-        book_label = st.selectbox("book", list(BOOKS.keys()),
-                                  label_visibility="collapsed", key="lookup_book")
-    with col_n:
-        lookup_num = st.number_input("num", min_value=1, max_value=10000, value=1,
-                                     label_visibility="collapsed", key="lookup_num")
-    with col_lb:
-        go2 = st.button("🔍  Lookup", type="primary",
-                        use_container_width=True, key="lookup_go")
-
-    if go2:
-        with st.spinner(""):
-            try:
-                result = engine.get_hadith_by_number(int(lookup_num), book=BOOKS[book_label])
-            except Exception as e:
-                st.error(f"Lookup failed: {e}"); return
-        if result:
-            raw = result.get("text","")
+        col_av, col_body = st.columns([0.06, 0.94])
+        with col_av:
             st.markdown(
-                f'<div class="lookup-result">'
-                f'<div class="result-meta" style="margin-bottom:.75rem;">'
-                f'<span class="meta-tag">📚 <span>{_esc(book_label)}</span></span>'
-                f'<span class="meta-tag"># <span>{lookup_num}</span></span>'
-                f'</div>'
-                f'<div class="hadith-body">{_esc(raw)}</div>'
-                f'</div>', unsafe_allow_html=True)
-        else:
-            st.warning(f"Hadith #{lookup_num} not found in {book_label}.")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Tab 2 — Hadith Companion (Chat)
-# ─────────────────────────────────────────────────────────────────────────────
-def hadith_chat_tab(engine):
-    from hadith_chat import synthesize_answer
-    _gemini_keys_raw = st.session_state.get("gemini_keys_raw", "")
-
-    st.markdown('<p class="section-label">💬 Ask me anything about Islam</p>',
-                unsafe_allow_html=True)
-    st.markdown(
-        '<p style="color:#64748b;font-size:.85rem;margin-bottom:.5rem;">'
-        'I answer based on hadith from Bukhari, Muslim, Tirmidhi, Abu Dawud, Ibn Majah, Nasai &amp; Nawawi. '
-        'Ask in Bangla or English.</p>', unsafe_allow_html=True)
-
-    # ── Search mode selector ──────────────────────────────────────────────────
-    chat_mode = st.radio(
-        "chat_mode",
-        options=["🚀 Hybrid  (BM25 + Dense + RRF + Re-rank)", "⚡ Simple  (Dense only)"],
-        index=0,
-        horizontal=True,
-        label_visibility="collapsed",
-        key="chat_search_mode",
-    )
-    chat_use_hybrid = chat_mode.startswith("🚀")
-    st.markdown(
-        f'<p style="color:#64748b;font-size:.75rem;margin-top:-.5rem;margin-bottom:.75rem;">'
-        f'{"BM25 · Dense · RRF · Cross-Encoder · Query reframing" if chat_use_hybrid else "Fine-tuned e5 bi-encoder · Fast"}'
-        f'</p>',
-        unsafe_allow_html=True,
-    )
-
-    # Chat history stored in session state
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
-    if "chat_sources" not in st.session_state:
-        st.session_state.chat_sources = {}   # message_idx -> list of source dicts
-    if "expanded_source" not in st.session_state:
-        st.session_state.expanded_source = {}  # (msg_idx, src_idx) -> bool
-    if "feedback_votes" not in st.session_state:
-        st.session_state.feedback_votes = {}  # msg_idx -> "up" | "down" | None
-
-    # ── Render existing conversation ─────────────────────────────────────────
-    for msg_idx, msg in enumerate(st.session_state.chat_history):
-        role    = msg["role"]
-        content = msg["content"]
-
-        if role == "user":
-            st.markdown(f'<div class="chat-user">{_esc(content)}</div>',
-                        unsafe_allow_html=True)
-        else:
-            sources = st.session_state.chat_sources.get(msg_idx, [])
-            st.markdown('<div class="chat-bot-wrap">', unsafe_allow_html=True)
-            st.markdown(f'<div class="chat-answer">{_esc(content)}</div>',
-                        unsafe_allow_html=True)
-
-            # ── Feedback buttons ──────────────────────────────────────────────
-            current_vote = st.session_state.feedback_votes.get(msg_idx)
-            col_up, col_down, col_spacer = st.columns([1, 1, 10])
-            with col_up:
-                up_label = "👍" if current_vote != "up" else "👍 ✓"
-                if st.button(up_label, key=f"up_{msg_idx}", disabled=(current_vote == "up")):
-                    from feedback import log_vote
-                    user_q = (st.session_state.chat_history[msg_idx - 1]["content"]
-                              if msg_idx > 0 else "")
-                    log_vote(user_q, content, "up", sources, search_mode=chat_mode.split()[0].strip("🚀⚡"))
-                    st.session_state.feedback_votes[msg_idx] = "up"
-                    st.rerun()
-            with col_down:
-                down_label = "👎" if current_vote != "down" else "👎 ✓"
-                if st.button(down_label, key=f"down_{msg_idx}", disabled=(current_vote == "down")):
-                    from feedback import log_vote
-                    user_q = (st.session_state.chat_history[msg_idx - 1]["content"]
-                              if msg_idx > 0 else "")
-                    log_vote(user_q, content, "down", sources, search_mode=chat_mode.split()[0].strip("🚀⚡"))
-                    st.session_state.feedback_votes[msg_idx] = "down"
-                    st.rerun()
-
-            # Source chips
-            if sources:
-                chips = "".join(
-                    f'<span class="src-chip" title="{_esc(book_display(s["book"]))} #{s["hadith_id"]}">'
-                    f'{s["ref"]} {_esc(book_display(s["book"]))} #{s["hadith_id"]}'
-                    f'</span>'
-                    for s in sources
-                )
-                st.markdown(f'<div class="source-strip">{chips}</div>', unsafe_allow_html=True)
-
-                # Expandable source detail — use Streamlit expanders (clickable)
-                with st.container():
-                    for s in sources:
-                        key = f"src_{msg_idx}_{s['idx']}"
-                        label = (f"{s['ref']} {book_display(s['book'])} "
-                                 f"#{s['hadith_id']}")
-                        with st.expander(label, expanded=False):
-                            bangla_q = is_bangla(
-                                st.session_state.chat_history[msg_idx-1]["content"]
-                                if msg_idx > 0 else ""
-                            )
-                            display = extract_display_text(s["text"], bangla_q)
-                            st.markdown(
-                                f'<div class="source-hadith">'
-                                f'<div class="result-meta" style="margin-bottom:.5rem;">'
-                                f'<span class="meta-tag">📚 <span>{_esc(book_display(s["book"]))}</span></span>'
-                                f'<span class="meta-tag"># <span>{s["hadith_id"]}</span></span>'
-                                f'</div>'
-                                f'<div class="hadith-body">{_esc(display)}</div>'
-                                f'</div>', unsafe_allow_html=True)
-
-            st.markdown('</div>', unsafe_allow_html=True)
-
-    # ── Input row ─────────────────────────────────────────────────────────────
-    st.markdown('<div class="fancy-divider"></div>', unsafe_allow_html=True)
-    col_q, col_k, col_send = st.columns([5, 1, 1])
-    with col_q:
-        question = st.text_input(
-            "chat_input",
-            placeholder="কুরবানি নিজ হাতে দেওয়া উত্তম?  ·  Is it better to slaughter with your own hands?",
-            label_visibility="collapsed",
-            key="chat_q",
-        )
-    with col_k:
-        chat_k = st.number_input("n", min_value=5, max_value=30, value=30,
-                                 label_visibility="collapsed", key="chat_k")
-    with col_send:
-        send = st.button("Send ➤", type="primary",
-                         use_container_width=True, key="chat_send")
-
-    col_clr, _ = st.columns([1, 4])
-    with col_clr:
-        if st.button("🗑 Clear chat", key="chat_clear"):
-            st.session_state.chat_history   = []
-            st.session_state.chat_sources   = {}
-            st.session_state.expanded_source= {}
-            st.rerun()
-
-    # ── Process new message ───────────────────────────────────────────────────
-    if send and question.strip():
-        q = question.strip()
-
-        # Append user message
-        st.session_state.chat_history.append({"role": "user", "content": q})
-        user_idx = len(st.session_state.chat_history) - 1
-
-        with st.spinner("Searching hadiths…"):
+                html_block('<div class="iq-avatar" style="margin-top:4px">✦</div>'),
+                unsafe_allow_html=True,
+            )
+        with col_body:
             try:
-                if chat_use_hybrid:
-                    raw_results = engine.search_hadiths(
-                        q, top_k=int(chat_k),
-                        use_reframing=True, extra_keys_raw=_gemini_keys_raw)
-                else:
-                    from hadith_search import HadithSearchEngine
-                    if "simple_engine" not in st.session_state:
-                        st.session_state["simple_engine"] = HadithSearchEngine()
-                    raw_results = st.session_state["simple_engine"].search_hadiths(
-                        q, top_k=int(chat_k),
-                        use_reframing=True, extra_keys_raw=_gemini_keys_raw)
-            except Exception as e:
-                st.error(f"Search failed: {e}")
+                answer = st.write_stream(_until_first_token(chunk_iter))
+            except Exception:
+                typing_placeholder.empty()
+                st.session_state.chat_history.append(
+                    {"role": "assistant", "content": "", "cached": False, "error": True}
+                )
+                st.session_state["_stream_error"] = True
+                st.session_state["_retry_question"] = q
+                st.rerun()
                 return
 
-        # ── Cache lookup — skip Gemini entirely for repeated questions ──────
-        qcache = load_query_cache()
-        cache_hit = qcache.get(q)
-        if cache_hit:
-            cached_answer, sources = cache_hit
-            st.markdown('<div class="chat-bot-wrap">', unsafe_allow_html=True)
-            st.markdown(cached_answer)
-            st.markdown('</div>', unsafe_allow_html=True)
-            answer = cached_answer
+    # Successful stream — store in history and cache
+    st.session_state.chat_history.append(
+        {"role": "assistant", "content": answer, "cached": False, "error": False}
+    )
+    st.session_state.chat_sources[msg_idx] = sources
+    st.session_state.feedback_votes.setdefault(msg_idx, None)
+    # Only cache non-empty, non-error answers (Feature 4)
+    if answer and not answer.startswith("_(AI answer unavailable"):
+        qcache.set(q, answer, sources)
+
+    st.rerun()
+
+
+def _render_thread(qcache) -> None:
+    """Render the full conversation history."""
+    from feedback import log_vote
+
+    hist = st.session_state.chat_history
+    votes = st.session_state.feedback_votes
+
+    for idx, msg in enumerate(hist):
+        if msg["role"] == "user":
+            st.markdown(
+                html_block(
+                    f'<div class="iq-msg-user">'
+                    f'<p class="iq-bubble">{_esc(msg["content"])}</p>'
+                    f'</div>'
+                ),
+                unsafe_allow_html=True,
+            )
+        elif msg.get("error"):
+            # Fix item 7: error state with retry button
+            error_state(st.session_state.get("_retry_question", ""))
         else:
-            # Synthesize answer — stream token-by-token
-            from hadith_chat import synthesize_answer_stream
-            chunk_iter, sources = synthesize_answer_stream(q, raw_results)
+            # AI message
+            cached = msg.get("cached", False)
+            with st.container():
+                col_av, col_body = st.columns([0.06, 0.94])
+                with col_av:
+                    st.markdown(
+                        html_block(
+                            '<div class="iq-avatar" style="margin-top:4px">✦</div>'
+                        ),
+                        unsafe_allow_html=True,
+                    )
+                with col_body:
+                    if cached:
+                        st.markdown(cached_tag_html(), unsafe_allow_html=True)
+                    # Render with st.markdown so streamed and replayed look identical
+                    st.markdown(msg["content"])
+                    srcs = st.session_state.chat_sources.get(idx, [])
+                    if srcs:
+                        source_cards(srcs, uid=f"m{idx}")
+                    feedback_row(idx, msg, srcs, log_vote)
 
-            # st.write_stream renders chunks as they arrive, then returns the
-            # full concatenated string so we can store it in chat history.
-            st.markdown('<div class="chat-bot-wrap">', unsafe_allow_html=True)
-            answer = st.write_stream(chunk_iter)
-            st.markdown('</div>', unsafe_allow_html=True)
+    # Handle retry button (matrix row 7: no duplicate user bubble)
+    if st.session_state.get("_stream_error") and st.session_state.get("_retry_question"):
+        error_state(st.session_state.get("_retry_question", ""))
 
-            # Save to cache for future identical questions
-            qcache.set(q, answer, sources)
 
-        # Append bot message
-        st.session_state.chat_history.append({"role": "assistant", "content": answer})
-        bot_idx = len(st.session_state.chat_history) - 1
-        st.session_state.chat_sources[bot_idx] = sources
+# ═══════════════════════════════════════════════════════════════════════════
+# Chat view
+# ═══════════════════════════════════════════════════════════════════════════
+def render_chat_view(engine, engine_ok: bool, err, qcache) -> None:
+    hist = st.session_state.chat_history
+    in_conversation = len(hist) > 0
 
+    # Top bar (fix item 7: real ghost pill buttons, no stray line)
+    top_bar("chat", in_conversation)
+
+    # Handle pending "AI-কে জিজ্ঞেস করুন" pre-fill
+    pending = st.session_state.get("_pending_ask", "")
+
+    # A question sent from the Home hero (via ?_q=) switches straight to the
+    # conversation layout: no hero, the user bubble + typing dots show at once.
+    hero_q = (st.session_state.pop("_hero_question", "") or "").strip()
+    if hero_q and not in_conversation:
+        if not engine_ok:
+            st.error(
+                "ডেটাবেস প্রস্তুত নয়। "
+                "Run `python3 app/build_hadith_db.py` first."
+            )
+            return
+        _handle_question(hero_q, engine, qcache)
+        return
+
+    if not in_conversation:
+        # ── HOME STATE ────────────────────────────────────────────────────
+        # st.markdown('<div>') open/close wrappers don't work — Streamlit
+        # wraps each call in its own element, auto-closing the div.
+        # Fix: render hero entirely inside an iframe (st.components.v1.html)
+        # which handles layout/glow natively. Question relay uses a hidden
+        # st.text_input that the iframe JS fills, followed by a hidden submit.
+
+        import streamlit.components.v1 as _cv1
+
+        mask_url = (
+            f"url('data:image/png;base64,{LOGO_MASK_B64}')"
+            if LOGO_MASK_B64
+            else "none"
+        )
+
+        hero_html = f"""<!DOCTYPE html><html><head>
+<meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;500;600;700&display=swap">
+<style>
+*,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
+:root{{
+  --bg:#F4F7F5;--surface:#FFFFFF;--surface-2:#E8EEEA;--line:#DAE3DD;
+  --ink:#13201A;--muted:#5A6A61;--accent:#0D6B51;--logo:#2B5E47;
+  --g1:#19B37F;--g2:#35C4C9;--g3:#E8C56A;--glow:0.4;
+  --font:'Hind Siliguri',system-ui,sans-serif;
+}}
+html,body{{background:transparent;font-family:var(--font);color:var(--ink);margin:0;overflow:hidden;height:100%;}}
+body.dark{{
+  --bg:#0A1210;--surface:#111C17;--line:#1E2D26;--ink:#E6EFE9;
+  --muted:#8DA095;--accent:#3FD6A6;--logo:#3FD6A6;
+  --g1:#22D69B;--g2:#3FD0E0;--g3:#F0CF73;--glow:0.55;
+}}
+@property --a{{syntax:"<angle>";inherits:false;initial-value:0deg;}}
+.wrap{{display:flex;flex-direction:column;align-items:center;gap:18px;text-align:center;padding:24px 20px 12px;}}
+.logo{{display:block;width:min(440px,78vw);aspect-ratio:1000/128;background:var(--logo);
+  -webkit-mask:{mask_url} center/contain no-repeat;mask:{mask_url} center/contain no-repeat;
+  transition:background-color 0.2s;}}
+.sub{{font-size:clamp(16px,3vw,21px);color:var(--muted);}}
+.cw{{position:relative;isolation:isolate;width:100%;max-width:680px;border-radius:30px;}}
+.cw::before,.cw::after{{content:"";position:absolute;z-index:-1;border-radius:inherit;
+  background:conic-gradient(from var(--a),var(--g1),var(--g2),var(--g3),var(--g1));
+  animation:spin 9s linear infinite;}}
+.cw::before{{inset:-2px;opacity:calc(var(--glow)+0.35);transition:opacity 0.3s;}}
+.cw::after{{inset:-2px;filter:blur(18px);opacity:var(--glow);transition:opacity 0.3s,inset 0.3s;}}
+.cw:focus-within::before{{opacity:1;}}
+.cw:focus-within::after{{opacity:calc(var(--glow)+0.3);inset:-6px;}}
+@keyframes spin{{to{{--a:360deg;}}}}
+@media(prefers-reduced-motion:reduce){{.cw::before,.cw::after{{animation:none;}}}}
+.cf{{display:flex;align-items:center;gap:8px;background:var(--surface);border-radius:28px;padding:10px 10px 10px 22px;min-height:62px;}}
+.cf input{{flex:1;min-width:0;border:0;outline:0;background:transparent;font-size:16px;font-family:var(--font);color:var(--ink);line-height:1.6;}}
+.cf input::placeholder{{color:var(--muted);}}
+.send{{width:42px;height:42px;flex:none;border:0;border-radius:50%;background:var(--accent);color:#fff;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:18px;
+  transition:opacity 0.2s,transform 0.2s;font-family:var(--font);}}
+.send:hover{{transform:scale(1.06);}}
+.pill{{display:inline-flex;align-items:center;gap:8px;height:44px;padding:0 22px;border-radius:999px;
+  border:1px solid var(--line);background:var(--surface);font-size:14.5px;font-weight:500;
+  font-family:var(--font);color:var(--ink);cursor:pointer;transition:border-color 0.2s,color 0.2s;}}
+.pill:hover{{border-color:var(--accent);color:var(--accent);}}
+.note{{font-size:12.5px;color:var(--muted);}}
+</style></head><body>
+<div class="wrap">
+  <div class="logo" role="img" aria-label="Bangla Islamic QA"></div>
+  <p class="sub">আসসালামু আলাইকুম, আজ আপনি কী জানতে চান?</p>
+  <div class="cw"><form class="cf" id="qf" autocomplete="off">
+    <input id="qi" type="text" placeholder="আপনার প্রশ্ন লিখুন…" aria-label="প্রশ্ন" value="{_html.escape(pending or '', quote=True)}">
+    <button type="submit" class="send" aria-label="পাঠান">↑</button>
+  </form></div>
+  <button class="pill" id="hpill" type="button">📖 হাদীস গ্রন্থ</button>
+  <p class="note">AI ভুল করতে পারে। উৎস যাচাই করে নিন।</p>
+</div>
+<script>
+(function(){{
+  var pd = window.parent.document;
+  var pw = window.parent;
+
+  // ── Theme sync ──────────────────────────────────────────────────────────
+  function syncTheme(){{
+    var t = pd.documentElement.getAttribute('data-theme');
+    if (!t) t = pw.matchMedia && pw.matchMedia('(prefers-color-scheme:dark)').matches ? 'dark' : 'light';
+    document.body.classList.toggle('dark', t === 'dark');
+  }}
+  syncTheme();
+  new MutationObserver(syncTheme).observe(pd.documentElement, {{attributes:true, attributeFilter:['data-theme']}});
+
+  // ── Submit handler ──────────────────────────────────────────────────────
+  // CANNOT use window.parent.location.assign() from inside a sandboxed iframe
+  // (Streamlit's sandbox does NOT include allow-top-navigation).
+  // Solution: postMessage to the parent; a parent-page listener (injected via
+  // st.html, which is NOT sandboxed) receives it and navigates from there.
+  // Run code AS the parent page: a <script> element created in the parent
+  // document executes with the parent's (unsandboxed) context, so it may
+  // navigate the top window.
+  function runInParent(code) {{
+    var s = pd.createElement('script');
+    s.textContent = code;
+    pd.body.appendChild(s);
+    pd.body.removeChild(s);
+  }}
+  function navigate(view, q) {{
+    var code = 'var u=new URL(window.location.href);' +
+      'u.searchParams.set("view",' + JSON.stringify(view) + ');' +
+      (q ? 'u.searchParams.set("_q",' + JSON.stringify(q) + ');'
+         : 'u.searchParams.delete("_q");') +
+      'window.location.assign(u.toString());';
+    runInParent(code);
+  }}
+
+  document.getElementById('qf').addEventListener('submit', function(e) {{
+    e.preventDefault();
+    var q = document.getElementById('qi').value.trim();
+    if (!q) return;
+    navigate('chat', q);
+  }});
+
+  // ── Hadith pill ─────────────────────────────────────────────────────────
+  document.getElementById('hpill').addEventListener('click', function() {{
+    navigate('hadith', '');
+  }});
+
+  // ── Auto-focus ──────────────────────────────────────────────────────────
+  setTimeout(function() {{ document.getElementById('qi').focus(); }}, 200);
+}})();
+</script>
+</body></html>"""
+
+        with st.container(key="home_hero"):
+            _cv1.html(hero_html, height=320, scrolling=False)
+
+        # The pending "AI-কে জিজ্ঞেস করুন" question is pre-filled into the
+        # hero input (see value= above) and is NOT sent automatically.
+        if pending:
+            st.session_state["_pending_ask"] = ""
+
+    else:
+        # ── CONVERSATION STATE ────────────────────────────────────────────
+        _render_thread(qcache)
+
+        # Pre-filled question banner (matrix row 10: pre-fill, not sent)
+        if pending:
+            st.info(f"প্রশ্ন: {pending}\n\nপাঠাতে নিচের বাক্সে Enter চাপুন।")
+
+        # "হাদীস গ্রন্থ" pill docked under the composer (CSS-positioned)
+        with st.container(key="dock_hadith"):
+            if st.button("📖 হাদীস গ্রন্থ", key="dock_hadith_btn"):
+                st.session_state["view"] = "hadith"
+                try:
+                    st.query_params["view"] = "hadith"
+                except Exception:
+                    pass
+                st.rerun()
+
+        # Fix item 5: st.chat_input at top level pins to the bottom
+        question = st.chat_input(
+            placeholder="আপনার প্রশ্ন লিখুন…",
+            key="chat_input_conv",
+        )
+
+        if pending:
+            st.session_state["_pending_ask"] = ""
+
+        # If pending ask and user pressed Enter without typing, use pending
+        if question is None and pending:
+            question = pending
+
+        if question and question.strip():
+            if not engine_ok:
+                st.error(
+                    "ডেটাবেস প্রস্তুত নয়। "
+                    "Run `python3 app/build_hadith_db.py` first."
+                )
+                return
+            _handle_question(question.strip(), engine, qcache)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Hadith Books view
+# ═══════════════════════════════════════════════════════════════════════════
+def _render_hadith_list(engine) -> None:
+    """Render the hadith list fragment (browse or search mode)."""
+    PAGE = 3
+    h_query   = st.session_state.get("h_query", "")
+    h_book    = st.session_state.get("h_book", "Sahih_Bukhari")
+    h_loaded  = st.session_state.get("h_loaded", 0)
+    h_results = st.session_state.get("h_results", [])
+    jump      = st.session_state.get("h_jump_result")
+
+    if h_query:
+        # ── SEARCH MODE ──────────────────────────────────────────────────
+        if not h_results:
+            try:
+                h_results = [
+                    h for h in _cached_hadith_search(engine, h_query, h_book)
+                    if str(h.get("book", "")).replace(" ", "_") not in HADITH_BOOKS_EXCLUDED
+                ]
+                st.session_state["h_results"] = h_results
+            except Exception as e:
+                st.error(f"অনুসন্ধান ব্যর্থ হয়েছে: {e}")
+                if st.button("আবার চেষ্টা করুন", key="retry_search"):
+                    st.session_state["h_results"] = []
+                    st.rerun()
+                return
+
+        if not h_results:
+            # Fix item 5: no results state
+            st.markdown(
+                html_block(
+                    '<div class="iq-error-box">কোনো হাদীস পাওয়া যায়নি</div>'
+                    '<p class="iq-note">অন্য শব্দ দিয়ে খুঁজুন।</p>'
+                ),
+                unsafe_allow_html=True,
+            )
+            if st.button("সার্চ মুছুন", key="clear_search", type="secondary"):
+                st.session_state["h_query"] = ""
+                st.session_state["h_results"] = []
+                st.session_state["h_loaded"] = 0
+                st.rerun()
+            return
+
+        # Show all top results at once (search returns SEARCH_TOP_K)
+        for i, h in enumerate(h_results):
+            book_key = str(h.get("book", "")).replace(" ", "_")
+            ask_key = f"ask_{book_key}_{h.get('hadith_id', '?')}"
+            hadith_card(h, flash=False, ask_key=ask_key)
+
+        st.caption("সব হাদীস দেখানো হয়েছে")
+        return
+
+    # ── BROWSE MODE ──────────────────────────────────────────────────────
+    try:
+        index = browse_index(_engine=engine, book=h_book)
+    except Exception:
+        index = []
+
+    if not index:
+        st.info("এই গ্রন্থের হাদীস পাওয়া যায়নি।")
+        return
+
+    # Number-jump: show jumped hadith first with flash (matrix row 14)
+    if jump:
+        book_key = str(jump.get("book", "")).replace(" ", "_")
+        ask_key = f"ask_jump_{book_key}_{jump.get('hadith_id', '?')}"
+        hadith_card(jump, flash=True, ask_key=ask_key)
+        st.session_state["h_jump_result"] = None
+
+    end = min(h_loaded + PAGE, len(index))
+
+    page_ids = [vid for _, vid in index[:end]]
+    try:
+        hadiths = fetch_page(engine, page_ids)
+    except Exception:
+        hadiths = []
+
+    for h in hadiths:
+        book_key = str(h.get("book", "")).replace(" ", "_")
+        ask_key = f"ask_{book_key}_{h.get('hadith_id', '?')}"
+        hadith_card(h, flash=False, ask_key=ask_key)
+
+    if end < len(index):
+        st.markdown(html_block('<div class="iq-loading-more" role="status"><span class="iq-spin"></span>আরও হাদীস লোড হচ্ছে…</div>'), unsafe_allow_html=True)
+        st.components.v1.html(infinite_scroll_script("sentinel_load_more"), height=0)
+        if st.button("আরও দেখুন", key="load_more", type="secondary"):
+            st.session_state["h_loaded"] = end
+            st.rerun()
+    else:
+        st.caption("সব হাদীস দেখানো হয়েছে")
+
+
+def render_hadith_view(engine, engine_ok: bool, err) -> None:
+    if not engine_ok:
+        st.error(
+            "ডেটাবেস প্রস্তুত নয়। "
+            "Run `python3 app/build_hadith_db.py` first."
+        )
+        return
+
+    # Top bar (fix item 7: back button + title on same row)
+    top_bar("hadith", False)
+
+    # ── Search bar (fix item 8: one pill, Enter submits, no emoji button) ──
+    with st.container(key="h_search_wrap"), \
+            st.form("h_search_form", clear_on_submit=False, border=False):
+        search_val = st.text_input(
+            "হাদীস খুঁজুন",
+            value=st.session_state.get("h_query", ""),
+            placeholder="হাদীস খুঁজুন…",
+            label_visibility="collapsed",
+            key="h_search_input",
+        )
+        search_submitted = st.form_submit_button("খুঁজুন")  # hidden; Enter submits
+
+    if search_submitted:
+        new_q = search_val.strip()
+        if new_q != st.session_state.get("h_query", ""):
+            st.session_state["h_query"] = new_q
+            st.session_state["h_results"] = []
+            st.session_state["h_loaded"] = 0
+            # Clear cached search so a new query re-runs
+            _cached_hadith_search.clear()
+            st.rerun()
+    elif not search_val.strip() and st.session_state.get("h_query"):
+        # Cleared search → back to browse (matrix row 12)
+        st.session_state["h_query"] = ""
+        st.session_state["h_results"] = []
+        st.session_state["h_loaded"] = 0
         st.rerun()
 
+    # ── Book select + number field (fix item 8) ────────────────────────────
+    ctrl_col1, ctrl_col2 = st.columns([3, 1.25], gap="small",
+                                      vertical_alignment="center")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Tab 3 — Document Q&A
-# ─────────────────────────────────────────────────────────────────────────────
-def general_documents_tab(uploaded_files):
-    try:
-        vector_store, embedding_model, document_ingestor, search_engine = load_doc_components()
-    except Exception as e:
-        st.error(f"Failed to load components: {e}"); return
+    with ctrl_col1:
+        book_names = list(HADITH_BOOKS.values())
+        book_keys  = list(HADITH_BOOKS.keys())
+        if st.session_state.get("h_book") not in HADITH_BOOKS:
+            st.session_state["h_book"] = "Sahih_Bukhari"
+        cur_idx = book_keys.index(st.session_state["h_book"])
+        selected_name = st.selectbox(
+            "হাদীস গ্রন্থ",
+            options=book_names,
+            index=cur_idx,
+            label_visibility="collapsed",
+            key="h_book_select",
+        )
+        selected_key = book_keys[book_names.index(selected_name)]
+        if selected_key != st.session_state.get("h_book"):
+            # Matrix row 13: changing book resets search and number
+            st.session_state["h_book"] = selected_key
+            st.session_state["h_query"] = ""
+            st.session_state["h_results"] = []
+            st.session_state["h_loaded"] = 0
+            st.session_state["h_jump_result"] = None
+            _cached_hadith_search.clear()
+            st.rerun()
 
-    if uploaded_files:
-        with st.sidebar:
-            if st.button("⚡ Process Documents", type="primary", use_container_width=True):
-                bar = st.progress(0); status = st.empty()
-                for idx, uf in enumerate(uploaded_files):
-                    status.markdown(f'<p style="color:#94a3b8;font-size:.8rem;">Processing {idx+1}/{len(uploaded_files)}: {uf.name}</p>',
-                                    unsafe_allow_html=True)
-                    try:
-                        fp = document_ingestor.save_uploaded_file(uf)
-                        if vector_store.document_exists(uf.name):
-                            st.sidebar.warning(f"Already indexed: {uf.name[:28]}")
-                        else:
-                            chunks, metas, _ = document_ingestor.process_document(fp)
-                            embs = embedding_model.embed_texts(chunks)
-                            ids  = [f"{uf.name}_{i}" for i in range(len(chunks))]
-                            vector_store.add_chunks(chunks, embs, metas, ids)
-                            st.sidebar.success(f"✓ {len(chunks)} chunks — {uf.name[:28]}")
-                    except Exception as e:
-                        st.sidebar.error(f"{uf.name[:28]}: {e}")
-                    bar.progress((idx+1)/len(uploaded_files))
-                status.markdown('<p style="color:#34d399;font-size:.8rem;">✓ Done</p>', unsafe_allow_html=True)
-                st.rerun()
-        with st.sidebar:
-            st.markdown('<div class="fancy-divider"></div>', unsafe_allow_html=True)
+    with ctrl_col2:
+        # Fix item 8: number field as form with # prefix and go button inside
+        with st.container(key="h_no_wrap"), \
+                st.form("h_no_form", clear_on_submit=False, border=False):
+            hadith_no_str = st.text_input(
+                "হাদীস নম্বর",
+                value="",
+                placeholder="হাদীস নম্বর",
+                label_visibility="collapsed",
+                key="h_no_input",
+            )
+            go_submitted = st.form_submit_button("→")
 
-    with st.sidebar:
-        st.markdown('<p class="section-label">📊 Document Store</p>', unsafe_allow_html=True)
-        try:   count = vector_store.get_collection_count()
-        except:count = "N/A"
-        st.metric("Indexed Chunks", count)
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("🗑 Clear", use_container_width=True):
-                if st.session_state.get("confirm_clear"):
-                    vector_store.clear_all_documents()
-                    st.session_state.confirm_clear = False; st.rerun()
+        if go_submitted and hadith_no_str and hadith_no_str.strip():
+            try:
+                n = int(hadith_no_str.strip())
+            except ValueError:
+                n = 0
+            if n > 0:
+                result = engine.get_hadith_by_number(n, book=st.session_state["h_book"])
+                if result is None:
+                    bname = book_display(st.session_state["h_book"])
+                    st.toast(f"{bname}-এ {n} নম্বর হাদীস পাওয়া যায়নি")
                 else:
-                    st.session_state.confirm_clear = True
-                    st.warning("Click again")
-        with c2:
-            if st.button("📋 Browse", use_container_width=True):
-                st.session_state.show_chunks = not st.session_state.get("show_chunks",False)
-                st.rerun()
+                    st.session_state["h_jump_result"] = _hadith_to_dict(result)
+                    st.session_state["h_loaded"] = 0
+                    st.rerun()
 
-    st.markdown('<p class="section-label">🔍 Ask Questions</p>', unsafe_allow_html=True)
-    query = st.text_input("dq", placeholder="আপনার প্রশ্ন লিখুন · Ask anything about your documents…",
-                          label_visibility="collapsed", key="doc_query")
-    col_k2, col_btn2 = st.columns([1, 3])
-    with col_k2:
-        top_k = st.number_input("k2", min_value=1, max_value=20, value=5,
-                                label_visibility="collapsed", key="doc_k")
-    with col_btn2:
-        go3 = st.button("🔍  Search Documents", type="primary",
-                        use_container_width=True, key="doc_go")
-
-    if go3 and query.strip():
-        with st.spinner(""):
-            try:   results = search_engine.search_documents(query.strip(), top_k=int(top_k))
-            except Exception as e: st.error(f"Search failed: {e}"); return
-        if results and "error" in results[0]:
-            st.markdown('<div class="empty-state"><div class="icon">🔭</div>'
-                        '<p>No relevant content found.</p></div>', unsafe_allow_html=True)
-        else:
-            st.markdown(f'<div class="stat-row"><span class="stat-pill">✨ {len(results)} chunks found</span></div>',
-                        unsafe_allow_html=True)
-            for i, r in enumerate(results, 1):
-                score = r["similarity_percentage"]
-                fn    = r["metadata"].get("filename","?")
-                cid   = r["metadata"].get("chunk_id","?")
-                words = r["metadata"].get("word_count",0)
-                badge = similarity_badge(score)
-                with st.container():
-                    st.markdown(
-                        f'<div class="result-card">'
-                        f'<div class="result-header"><span style="color:#94a3b8;font-size:.8rem;font-weight:600">#{i}</span>{badge}</div>'
-                        f'<div class="result-meta">'
-                        f'<span class="meta-tag">📄 <span>{_esc(fn)}</span></span>'
-                        f'<span class="meta-tag">§ <span>chunk {cid}</span></span>'
-                        f'<span class="meta-tag">📝 <span>{words} w</span></span>'
-                        f'</div>'
-                        f'<div class="hadith-body">{_esc(r["text"])}</div>'
-                        f'</div>', unsafe_allow_html=True)
-    elif not go3:
-        st.markdown('<div class="empty-state"><div class="icon">📄</div>'
-                    '<p>Upload PDF or TXT via sidebar, then ask questions.</p></div>',
-                    unsafe_allow_html=True)
-
-    if st.session_state.get("show_chunks"):
-        st.markdown('<div class="fancy-divider"></div>', unsafe_allow_html=True)
-        st.markdown('<p class="section-label">📋 Document Chunks</p>', unsafe_allow_html=True)
+    # ── Count line (fix item 8: muted 13px, Bangla digits) ────────────────
+    h_query = st.session_state.get("h_query", "")
+    h_book  = st.session_state.get("h_book", "Sahih_Bukhari")
+    bname   = book_display(h_book)
+    if h_query and not st.session_state.get("h_results"):
+        # Run the search before the count line so "N টি ফলাফল" shows on the
+        # same render.  Errors are left to the list, which shows Retry.
         try:
-            all_c = vector_store.get_all_chunks()
-            if all_c and all_c.get("documents"):
-                st.caption(f"{len(all_c['documents'])} chunks in store")
-                for i,(doc,meta,cid) in enumerate(zip(all_c["documents"],all_c["metadatas"],all_c["ids"])):
-                    with st.expander(f"📄 {meta.get('filename','?')} — chunk {meta.get('chunk_id',i+1)}"):
-                        st.caption(f"ID: `{cid}` · {meta.get('word_count','?')} words")
-                        st.text_area("",doc,height=200,disabled=True,key=f"chunk_{i}")
-            else:
-                st.info("No documents indexed yet.")
-        except Exception as e:
-            st.error(str(e))
+            st.session_state["h_results"] = [
+                h for h in _cached_hadith_search(engine, h_query, h_book)
+                if str(h.get("book", "")).replace(" ", "_") not in HADITH_BOOKS_EXCLUDED
+            ]
+        except Exception:
+            pass
+    if h_query:
+        results_count = len(st.session_state.get("h_results", []))
+        if results_count:
+            st.markdown(
+                html_block(f'<div class="iq-count-line">{_bn_digits(results_count)} টি ফলাফল</div>'),
+                unsafe_allow_html=True,
+            )
+    else:
+        try:
+            idx = browse_index(_engine=engine, book=h_book)
+            total = len(idx)
+        except Exception:
+            total = 0
+        if total:
+            st.markdown(
+                html_block(
+                    f'<div class="iq-count-line">{bname} · {_bn_digits(total)}টি হাদীস</div>'
+                ),
+                unsafe_allow_html=True,
+            )
+
+    # ── List ─────────────────────────────────────────────────────────────
+    _render_hadith_list(engine)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════
+# Document Q&A  (hidden route — ?view=docs only; NOT deleted)
+# ═══════════════════════════════════════════════════════════════════════════
+def general_documents_tab():
+    """Hidden Document Q&A tab. Only shown via ?view=docs query param."""
+    st.info(
+        "Document Q&A is a hidden feature. "
+        "Upload a PDF or TXT to ask questions about it."
+    )
+    uploaded = st.file_uploader(
+        "Upload document", type=["pdf", "txt"], key="doc_uploader"
+    )
+    if uploaded:
+        st.write(f"Uploaded: {uploaded.name}")
+        st.warning(
+            "Document Q&A processing is not wired in the new UI. "
+            "See UI_NOTES.md."
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Main
-# ─────────────────────────────────────────────────────────────────────────────
-def main():
-    # Force sidebar open on first visit
-    if "sidebar_state" not in st.session_state:
-        st.session_state["sidebar_state"] = "expanded"
+# ═══════════════════════════════════════════════════════════════════════════
+def main() -> None:
+    _init_session_state()
+    _sync_query_params()
 
-    hadith_stats = None
-    engine_ok    = False
-    engine       = None
-
-    # ── Render sidebar FIRST — before any blocking calls ─────────────────────
-    # This ensures sidebar is visible immediately on page load.
-    # Stats will show as None initially; engine load happens after.
-    uploaded_files = render_sidebar(hadith_stats)
-
-    # ── Load engine ───────────────────────────────────────────────────────────
-    _engine_error = None
-    try:
-        engine = load_hadith_engine()   # cached — fast after first load
-        hadith_stats = engine.get_database_stats()
-        engine_ok    = True
-    except Exception as _e:
-        _engine_error = _e
-
-    st.markdown("""
-<div class="hero-banner">
-  <div class="hero-arabic">بِسْمِ اللَّهِ الرَّحْمَنِ الرَّحِيمِ</div>
-  <div class="hero-title">🕌 Hadith Knowledge Search</div>
-  <div class="hero-subtitle">
-    Semantic search · AI companion · 35,809 hadith
-    · Bangla &amp; English · Bukhari · Muslim · Tirmidhi · Abu Dawud · Ibn Majah · Nasai · Nawawi
-  </div>
-</div>""", unsafe_allow_html=True)
-
-    # Inject sidebar toggle button directly into the parent document
-    import streamlit.components.v1 as _components
-    _components.html("""
+    # Inject CSS + synchronous theme-apply script (runs before first paint)
+    st.markdown(
+        f"""<style>{build_css(LOGO_MASK_B64)}</style>
 <script>
-(function() {
-  function injectToggle() {
-    const parentDoc = window.parent.document;
-    if (parentDoc.getElementById('kiro-sidebar-toggle')) return;
+(function(){{
+  var t=null;try{{t=localStorage.getItem('theme');}}catch(e){{}}
+  if(!t){{t=window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}}
+  document.documentElement.setAttribute('data-theme',t);
+}})();
+</script>""",
+        unsafe_allow_html=True,
+    )
 
-    const btn = parentDoc.createElement('button');
-    btn.id = 'kiro-sidebar-toggle';
-    btn.innerHTML = '&#9776;';
-    btn.title = 'Toggle sidebar';
-    Object.assign(btn.style, {
-      position:       'fixed',
-      top:            '0.5rem',
-      left:           '0.5rem',
-      zIndex:         '999999',
-      background:     'rgba(124,58,237,0.88)',
-      border:         '1px solid rgba(167,139,250,0.45)',
-      borderRadius:   '8px',
-      padding:        '0.3rem 0.6rem',
-      cursor:         'pointer',
-      fontSize:       '1.15rem',
-      color:          '#e2d9ff',
-      backdropFilter: 'blur(8px)',
-      lineHeight:     '1.2',
-      transition:     'background 0.2s',
-    });
-    btn.onmouseover = () => btn.style.background = 'rgba(124,58,237,1)';
-    btn.onmouseout  = () => btn.style.background = 'rgba(124,58,237,0.88)';
-    btn.onclick = () => {
-      const parentDoc = window.parent.document;
-      const nativeBtn =
-        parentDoc.querySelector('[data-testid="stSidebarCollapseButton"] button') ||
-        parentDoc.querySelector('[data-testid="stSidebarCollapsedControl"] button') ||
-        parentDoc.querySelector('button[aria-label="Close sidebar"]') ||
-        parentDoc.querySelector('button[aria-label="Open sidebar"]');
-      if (nativeBtn) { nativeBtn.click(); return; }
-      const sidebar = parentDoc.querySelector('[data-testid="stSidebar"]');
-      if (!sidebar) return;
-      const isOpen = sidebar.style.transform !== 'translateX(-100%)';
-      sidebar.style.transition = 'transform 0.3s ease';
-      sidebar.style.transform  = isOpen ? 'translateX(-100%)' : 'translateX(0)';
-    };
-    parentDoc.body.appendChild(btn);
-  }
+    # Inject JS once (theme toggle, copy handler, aria patches)
+    import streamlit.components.v1 as _c
+    _c.html(theme_toggle_script(), height=0)
+    _c.html(copy_handler_script(), height=0)
+    _c.html(aria_patch_script(), height=0)
 
-  injectToggle();
-  const iv = setInterval(() => {
-    if (window.parent.document.getElementById('kiro-sidebar-toggle')) {
-      clearInterval(iv);
-    } else {
-      injectToggle();
-    }
-  }, 500);
-})();
-</script>
-""", height=0)
+    # Load engine (errors handled in each view)
+    _err = None
+    engine_ok = False
+    engine = None
+    try:
+        engine = load_hadith_engine()
+        engine_ok = True
+    except Exception as e:
+        _err = e
 
-    tab2, tab1, tab3 = st.tabs([
-        "  💬  Hadith Companion  ",
-        "  🕌  Hadith Search  ",
-        "  📄  Document Q&A  ",
-    ])
+    qcache = load_query_cache()
 
-    with tab1:
-        if engine_ok: hadith_search_tab(engine)
-        else: st.error(f"Hadith database not ready. Error: {_engine_error}\n\nRun `python3 app/build_hadith_db.py` first.")
-    with tab2:
-        if engine_ok: hadith_chat_tab(engine)
-        else: st.error(f"Hadith database not ready. Error: {_engine_error}")
-    with tab3:
-        general_documents_tab(uploaded_files)
+    # Route to the active view
+    view = st.session_state.get("view", "chat")
+    if view == "hadith":
+        render_hadith_view(engine, engine_ok, _err)
+    elif view == "docs":
+        general_documents_tab()
+    else:
+        render_chat_view(engine, engine_ok, _err, qcache)
+
 
 if __name__ == "__main__":
     main()
