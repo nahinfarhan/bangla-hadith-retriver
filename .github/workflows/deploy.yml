@@ -71,6 +71,7 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key:      ${{ secrets.VPS_SSH_KEY }}
           command_timeout: 30m
+          script_stop: true
           script: |
             # ── Sync all hadith JSON files from HuggingFace ─────────────────
             # --break-system-packages required on Ubuntu 22+ (PEP 668)
@@ -96,7 +97,8 @@ jobs:
                     print(f'✅ {f}')
             "
 
-            # Pull the new image
+            # Log in to GHCR on the VPS and pull the new image
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
             docker pull ghcr.io/nahinfarhan/hadith-app:latest
 
             # Stop and remove the old container
