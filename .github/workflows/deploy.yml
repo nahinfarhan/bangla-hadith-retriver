@@ -97,6 +97,17 @@ jobs:
                     print(f'✅ {f}')
             "
 
+            # ── Sync the fine-tuned embedding model (skipped if already present) ──
+            mkdir -p /opt/hadith-app/models
+            HUGGINGFACE_HUB_ENABLE_HF_TRANSFER=1 python3 -c "
+            from huggingface_hub import snapshot_download
+            snapshot_download(
+                repo_id='nahinfarhan/hadith-retriever-bn-v2',
+                local_dir='/opt/hadith-app/models/hadith-retriever-bn-v2',
+            )
+            print('✅ embedding model ready')
+            "
+
             # Log in to GHCR on the VPS and pull the new image
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
             docker pull ghcr.io/nahinfarhan/hadith-app:latest
@@ -112,6 +123,7 @@ jobs:
               --restart unless-stopped \
               --env-file /opt/hadith-app/.env \
               -v /opt/hadith-app/secrets/gcp-key.json:/secrets/gcp-key.json:ro \
+              -v /opt/hadith-app/models:/app/models:ro \
               -v /opt/hadith-app/data:/app/data \
               ghcr.io/nahinfarhan/hadith-app:latest
 
@@ -119,11 +131,32 @@ jobs:
             sleep 10
             curl -sf http://localhost:7860/_stcore/health && echo " — app is up"
 
-            # Rebuild vector DB in background (takes ~15-20 min, doesn't block deploy)
-            # Logs written to /opt/hadith-app/data/db_rebuild.log
-            nohup docker exec hadith-app python3 app/build_hadith_db.py --force \
-              > /opt/hadith-app/data/db_rebuild.log 2>&1 &
-            echo "⏳ DB rebuild started in background — tail /opt/hadith-app/data/db_rebuild.log"
+            # Build the vector DB ONLY if the live one is missing or incomplete.
+            # It is built into a staging dir by a separate one-off container, then
+            # swapped in and the app restarted, so the live DB is never wiped or
+            # served half-built. Log: /opt/hadith-app/data/db_rebuild.log
+            if [ ! -f /opt/hadith-app/data/hadith_vectors/.build_complete ] \
+               && [ -z "$(docker ps -q -f name=hadith-build)" ]; then
+              cat > /opt/hadith-app/rebuild_db.sh <<'EOS'
+            #!/bin/sh
+            set -e
+            D=/opt/hadith-app/data
+            rm -rf "$D/hadith_vectors_new" "$D/hadith_vectors_old"
+            docker run --rm --name hadith-build \
+              -v /opt/hadith-app/models:/app/models:ro \
+              -v "$D":/app/data \
+              ghcr.io/nahinfarhan/hadith-app:latest \
+              python3 app/build_hadith_db.py --out /app/data/hadith_vectors_new
+            if [ -d "$D/hadith_vectors" ]; then mv "$D/hadith_vectors" "$D/hadith_vectors_old"; fi
+            mv "$D/hadith_vectors_new" "$D/hadith_vectors"
+            docker restart hadith-app
+            rm -rf "$D/hadith_vectors_old"
+            EOS
+              nohup sh /opt/hadith-app/rebuild_db.sh > /opt/hadith-app/data/db_rebuild.log 2>&1 &
+              echo "⏳ DB build started in background — tail /opt/hadith-app/data/db_rebuild.log"
+            else
+              echo "✅ Vector DB already built (or a build is running) — not rebuilding"
+            fi
 
             # Remove dangling images to free disk space
             docker image prune -f

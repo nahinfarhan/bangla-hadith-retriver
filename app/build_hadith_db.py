@@ -29,7 +29,6 @@ from vector_store import VectorStore
 
 # ── Config ───────────────────────────────────────────────────────────────────
 VECTOR_DB_PATH = str(ROOT_DIR / "data" / "hadith_vectors")
-SENTINEL_FILE  = str(ROOT_DIR / "data" / "hadith_vectors" / ".build_complete")
 
 JSON_SOURCES = [
     (str(ROOT_DIR / "data" / "hadiths.json"),           "Sahih_Bukhari"),
@@ -153,6 +152,7 @@ def _try_int(val: str) -> int:
 class HadithDatabaseBuilder:
     def __init__(self, vector_db_path: str = VECTOR_DB_PATH):
         self.vector_db_path = vector_db_path
+        self.sentinel_file  = os.path.join(vector_db_path, ".build_complete")
         self.vector_store   = None   # lazy-init
         self.embed_model    = None
 
@@ -162,7 +162,7 @@ class HadithDatabaseBuilder:
         self.vector_store = VectorStore(persist_directory=self.vector_db_path)
 
     def is_already_built(self) -> bool:
-        return os.path.exists(SENTINEL_FILE)
+        return os.path.exists(self.sentinel_file)
 
     def build(self, force: bool = False):
         if not force and self.is_already_built():
@@ -224,7 +224,7 @@ class HadithDatabaseBuilder:
             print()  # newline after \r
 
         # Write sentinel so we never re-build unless forced
-        with open(SENTINEL_FILE, "w") as f:
+        with open(self.sentinel_file, "w") as f:
             f.write(f"{total_loaded}\n")
 
         print(f"\n✅  Done. {total_loaded} hadiths indexed → {self.vector_db_path}")
@@ -247,10 +247,11 @@ class HadithDatabaseBuilder:
 def main():
     parser = argparse.ArgumentParser(description="Build Hadith vector database from JSON files")
     parser.add_argument("--force",  action="store_true", help="Rebuild even if DB already exists")
+    parser.add_argument("--out", default=VECTOR_DB_PATH, help="Output ChromaDB directory (default: data/hadith_vectors)")
     parser.add_argument("--verify", action="store_true", help="Show DB stats and exit")
     args = parser.parse_args()
 
-    builder = HadithDatabaseBuilder()
+    builder = HadithDatabaseBuilder(vector_db_path=args.out)
 
     if args.verify:
         builder.verify()

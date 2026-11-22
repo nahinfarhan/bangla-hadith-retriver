@@ -7,7 +7,9 @@ Results are cached at the @st.cache_resource level (once per engine + book).
 import streamlit as st
 
 
-@st.cache_data(show_spinner=False)
+# ttl: a browse index fetched while the DB is being (re)built is partial;
+# let it expire instead of freezing the partial result until restart.
+@st.cache_data(show_spinner=False, ttl=300)
 def browse_index(_engine, book: str) -> list:
     """
     Return a sorted list of (hadith_number: int, vector_id: str) for a book.

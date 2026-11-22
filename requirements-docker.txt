@@ -2,7 +2,7 @@
 # (matches the local conda env: hadith_qa)
 --extra-index-url https://download.pytorch.org/whl/cpu
 
-streamlit==1.41.1
+streamlit==1.45.1
 chromadb==1.5.9
 sentence-transformers==5.5.1
 transformers==4.44.2
