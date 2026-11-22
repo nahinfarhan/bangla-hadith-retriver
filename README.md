@@ -11,7 +11,7 @@ license: mit
 
 # Bangla Hadith Retriever 🕌
 
-A semantic search and conversational Q&A system over **20,505 hadiths** from Ṣaḥīḥ al-Bukhārī, Ṣaḥīḥ Muslim, and Jāmiʿ at-Tirmidhī — supporting both Bangla and English queries.
+A semantic search and conversational Q&A system over **35,803 hadiths** from 7 collections (Ṣaḥīḥ al-Bukhārī, Ṣaḥīḥ Muslim, Sunan Abī Dāwūd, Jāmiʿ at-Tirmidhī, Sunan an-Nasāʾī, Sunan Ibn Mājah, and Riyāḍ aṣ-Ṣāliḥīn) — supporting both Bangla and English queries.
 
 **Live demo:** [nahinfarhan/bangla-hadith-retriver on HF Spaces](https://huggingface.co/spaces/nahinfarhan/bangla-hadith-retriver)
 
@@ -37,7 +37,7 @@ A **multi-stage hybrid retrieval pipeline** combining:
 3. **BM25 retrieval** — sparse keyword matching over the same corpus using `rank_bm25`
 4. **RRF fusion** — Reciprocal Rank Fusion (k=60) merges the dense and BM25 ranked lists
 5. **Cross-encoder re-ranking** — `cross-encoder/ms-marco-MiniLM-L-6-v2` re-scores the fused candidates to produce the final ranked output
-6. **Gemini-powered answer synthesis** — the top retrieved hadiths are passed to Gemini as context to generate a grounded, cited answer
+6. **Gemini-powered answer synthesis** — the top retrieved hadiths are passed to Gemini (`gemini-2.5-flash` via Vertex AI) as context to generate a grounded, cited answer
 
 ---
 
@@ -119,11 +119,17 @@ Training pairs were generated from the raw hadith JSON files using a semi-automa
 **Dataset:** [`nahinfarhan/hadith-vectors-db`](https://huggingface.co/datasets/nahinfarhan/hadith-vectors-db)
 
 The dataset contains:
-- Pre-built **ChromaDB vector store** (`data/hadith_vectors/`) — 284 MB, contains the embedded vectors for all 20,505 hadiths, ready to use without re-embedding
+- Pre-built **ChromaDB vector store** (`data/hadith_vectors/`) — 284 MB, contains the embedded vectors for all 35,803 hadiths, ready to use without re-embedding
 - Raw hadith JSON files:
-  - `hadiths.json` — Ṣaḥīḥ al-Bukhārī (7,563 hadiths)
-  - `muslim_hadiths.json` — Ṣaḥīḥ Muslim (7,470 hadiths)
-  - `tirmidhi_hadiths.json` — Jāmiʿ at-Tirmidhī (3,956 hadiths)
+  - `hadiths.json` — Ṣaḥīḥ al-Bukhārī (7,457 entries)
+  - `muslim_hadiths.json` — Ṣaḥīḥ Muslim (7,290 entries)
+  - `abu_dawud_hadiths.json` — Sunan Abī Dāwūd (5,270 entries)
+  - `tirmidhi_hadiths.json` — Jāmiʿ at-Tirmidhī (5,758 entries)
+  - `nasai_hadiths.json` — Sunan an-Nasāʾī (5,656 entries)
+  - `ibnmajah_hadiths.json` — Sunan Ibn Mājah (4,336 entries)
+  - `nawawi_hadiths.json` — Riyāḍ aṣ-Ṣāliḥīn (42 entries)
+
+The 35,809 JSON entries produce 35,803 indexed documents.
 
 Each JSON entry has the structure:
 ```json
@@ -205,7 +211,6 @@ Document Q&A (PDF/TXT upload) is preserved but not shown in the normal UI. Acces
 | `app/ui/components.py` | Render helpers: logo, top bar, hadith card, source cards, feedback row |
 | `app/ui/scripts.py` | Injected JS: theme toggle, copy handler, infinite-scroll sentinel, aria patches |
 | `app/ui/data.py` | Browse index + page fetch (read-only, cached per book) |
-| `UI_NOTES.md` | Known limitations and out-of-scope decisions |
 
 ---
 
@@ -215,7 +220,7 @@ Document Q&A (PDF/TXT upload) is preserved but not shown in the normal UI. Acces
 
 - Python 3.11+
 - ~3 GB disk space (model + vector DB)
-- A [Gemini API key](https://aistudio.google.com) (free) for AI-generated answers — optional, search works without it
+- A Google Cloud project with Vertex AI enabled and a service-account key, for Gemini query reframing and answers
 
 ### Step 1 — Clone the repo
 
@@ -253,22 +258,23 @@ bangla-hadith-retriver/
 │   ├── hadith_vectors/       ← ChromaDB (pre-built)
 │   ├── hadiths.json
 │   ├── muslim_hadiths.json
-│   └── tirmidhi_hadiths.json
+│   ├── abu_dawud_hadiths.json
+│   ├── tirmidhi_hadiths.json
+│   ├── nasai_hadiths.json
+│   ├── ibnmajah_hadiths.json
+│   └── nawawi_hadiths.json
 └── models/
     └── hadith-retriever-bn-v2/
 ```
 
 ### Step 4 — Set up environment variables
 
-```bash
-cp .env.example .env
-# Edit .env and add your Gemini key(s)
-```
+Gemini is called through Vertex AI using Application Default Credentials. Create a `.env` file:
 
 ```env
-GEMINI_API_KEY=your_key_here
-# Or multiple keys (rotated automatically to avoid rate limits):
-GEMINI_API_KEYS=key1,key2,key3
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json
+GCP_PROJECT_ID=your-project-id
+GCP_REGION=us-central1
 ```
 
 ### Step 5 — Run the app
@@ -288,18 +294,12 @@ The app will be available at `http://localhost:8501`.
 If you want an environment identical to the HF Spaces deployment:
 
 ```bash
-# Build
-docker build -t bangla-hadith-retriver .
-
-# Run
-docker run -p 7860:7860 \
-  -e GEMINI_API_KEYS="your_key_here" \
-  bangla-hadith-retriver
+docker compose up --build
 ```
 
 The app will be at `http://localhost:7860`.
 
-> **Important:** The Dockerfile expects `data/hadith_vectors/`, `data/*.json`, and `models/hadith-retriever-bn-v2/` to be present locally before building. Download them first (Step 3 above).
+> **Important:** The image contains only the app source. `data/` and `models/hadith-retriever-bn-v2/` are mounted at runtime by `docker-compose.yml`, so download them first (Step 3 above). The service-account key is mounted at `/secrets/gcp-key.json`, and `GCP_PROJECT_ID` is read from your environment or `.env`.
 
 ---
 
@@ -311,8 +311,10 @@ If you want to re-embed all hadiths yourself rather than using the pre-built Chr
 python app/build_hadith_db.py
 ```
 
+The Docker `entrypoint.sh` runs this automatically on first start if `data/hadith_vectors/.build_complete` is missing.
+
 This will:
-1. Load all hadiths from the three JSON files
+1. Load all hadiths from the seven JSON files
 2. Encode each hadith with the fine-tuned `hadith-retriever-bn-v2` model
 3. Store embeddings in `data/hadith_vectors/` (ChromaDB format)
 
@@ -324,18 +326,16 @@ Runtime: ~10 minutes on CPU, ~2 minutes with a GPU.
 
 | File | Purpose |
 |------|---------|
-| `app/main.py` | Streamlit UI — search tab, chat tab, direct lookup |
+| `app/main.py` | Streamlit app — chat and hadith-book views |
 | `app/hybrid_search.py` | Full hybrid pipeline: BM25 + Dense + RRF + re-ranking |
-| `app/hadith_search.py` | Dense-only search using the fine-tuned e5 model |
 | `app/bm25_index.py` | BM25 index over the hadith corpus (`rank_bm25`) |
 | `app/reranker.py` | Cross-encoder re-ranking (`ms-marco-MiniLM-L-6-v2`) |
 | `app/query_reframer.py` | Query expansion via Gemini |
 | `app/hadith_chat.py` | Grounded answer synthesis via Gemini |
-| `app/gemini_client.py` | Gemini API client with multi-key rotation and rate-limit handling |
+| `app/gemini_client.py` | Gemini client via Vertex AI (Application Default Credentials) |
 | `app/embed.py` | Wrapper around the fine-tuned sentence-transformers model |
 | `app/vector_store.py` | ChromaDB wrapper for document ingestion and search |
-| `app/ingest.py` | PDF/TXT document ingestor for the general doc search tab |
-| `app/hadith_processor.py` | PDF processor for extracting clean Bangla text from hadithbd.com PDFs |
+| `app/ingest.py` | PDF/TXT document ingestor for the hidden document Q&A view |
 | `app/build_hadith_db.py` | Script to build the ChromaDB vector store from the raw JSON files |
 
 ---
@@ -346,12 +346,12 @@ The app is deployed on **Hugging Face Spaces** as a Docker Space:
 
 🔗 **[nahinfarhan/bangla-hadith-retriver](https://huggingface.co/spaces/nahinfarhan/bangla-hadith-retriver)**
 
-The Space bakes the pre-built ChromaDB and the fine-tuned model directly into the Docker image, so there is no cold-start embedding step. The image is ~3 GB.
+The deployment syncs the hadith JSON files from Hugging Face and rebuilds the vector database on deploy.
 
 To deploy your own copy to HF Spaces:
 1. Create a new Space at huggingface.co/spaces — choose **Docker** as the SDK
-2. Set the secret `GEMINI_API_KEYS` in the Space settings
-3. Push this repo (with data and models included) to the Space's git remote:
+2. Set `GCP_PROJECT_ID` and the service-account credentials as secrets in the Space settings
+3. Push this repo to the Space's git remote:
 
 ```bash
 git remote add space https://huggingface.co/spaces/YOUR_USERNAME/YOUR_SPACE
@@ -369,7 +369,8 @@ git push space main
 | Embedding model | sentence-transformers + fine-tuned multilingual-e5-base |
 | Sparse retrieval | rank-bm25 |
 | Re-ranking | cross-encoder/ms-marco-MiniLM-L-6-v2 |
-| Answer generation | Google Gemini (gemini-1.5-flash) |
+| Answer generation | Google Gemini 2.5 Flash (Vertex AI) |
+| Error tracking | Sentry |
 | PDF parsing | pdfplumber |
 | Deployment | Docker + Hugging Face Spaces |
 
@@ -380,7 +381,7 @@ git push space main
 - The cross-encoder (`ms-marco-MiniLM-L-6-v2`) was trained on English MS MARCO data. It works reasonably well as a re-ranker but a Bangla-native cross-encoder would improve results further.
 - Gemini-generated answers are only as good as the retrieved hadiths. If retrieval misses the relevant hadith, the answer will be wrong or incomplete.
 - The BM25 index is rebuilt in memory on startup from the JSON files. For a production deployment, persisting the index to disk would reduce startup time.
-- The system does not cover all hadith collections — only Bukhari, Muslim, and Tirmidhi.
+- The system does not cover all hadith collections — the six major collections plus Riyāḍ aṣ-Ṣāliḥīn. Musnad Ahmad, Muwatta Malik and others are not included.
 
 ---
 
