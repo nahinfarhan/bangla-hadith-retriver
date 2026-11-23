@@ -548,11 +548,40 @@ def source_cards(sources: list, uid: str = "") -> None:
 # Feedback row (fix item 6, 9 — no emoji, line-icon buttons)
 # ═══════════════════════════════════════════════════════════════════════════
 
+def _on_feedback_click(msg_idx: int, vote: str, user_q: str, answer: str,
+                       sources: list, log_vote_fn) -> None:
+    """on_click callback: runs BEFORE the rerun, so the vote is never lost.
+
+    Records the vote in session state, the JSONL feedback log, and the
+    anonymous SQLite query log (row id kept in chat_log_ids[msg_idx]).
+    """
+    votes = st.session_state.setdefault("feedback_votes", {})
+    if votes.get(msg_idx) is not None:
+        return  # already voted; ignore duplicate clicks
+    votes[msg_idx] = vote
+    try:
+        log_vote_fn(
+            question=user_q, answer=answer, vote=vote,
+            sources=sources, search_mode="hybrid",
+        )
+    except Exception:
+        pass
+    try:
+        from query_logger import save_feedback
+        log_id = st.session_state.get("chat_log_ids", {}).get(msg_idx)
+        if log_id is not None and log_id >= 0:
+            save_feedback(log_id, vote)
+    except Exception:
+        pass
+    st.toast("ধন্যবাদ, মতামত জমা হয়েছে")
+
+
 def feedback_row(msg_idx: int, msg: dict, sources: list, log_vote_fn) -> None:
     """Render 👍 / 👎 feedback buttons under an AI answer.
 
-    Calls ``log_vote`` exactly once per click, marks the chosen button,
-    shows a toast, and survives reruns (matrix row 6).
+    Rendered from the stored chat history (outside the question-handling
+    block), with on_click callbacks, so a click is processed before the page
+    reruns and the answer never disappears. Each answer accepts one vote.
     """
     # Only show feedback on complete, non-error answers
     if msg.get("error") or not msg.get("content"):
@@ -560,6 +589,7 @@ def feedback_row(msg_idx: int, msg: dict, sources: list, log_vote_fn) -> None:
 
     votes = st.session_state.setdefault("feedback_votes", {})
     current_vote = votes.get(msg_idx)
+    voted = current_vote is not None
 
     # Find the user question (the message just before this assistant message)
     hist = st.session_state.get("chat_history", [])
@@ -573,51 +603,24 @@ def feedback_row(msg_idx: int, msg: dict, sources: list, log_vote_fn) -> None:
 
     with col_up:
         up_selected = current_vote == "up"
-        up_key = f"vote_up_{msg_idx}_selected" if up_selected else f"vote_up_{msg_idx}"
-        if st.button(
+        st.button(
             "সহায়ক" + (" ✓" if up_selected else ""),
-            key=up_key,
+            key=f"vote_up_{msg_idx}_selected" if up_selected else f"vote_up_{msg_idx}",
             help="উত্তরটি সহায়ক",
             type="primary" if up_selected else "secondary",
-        ):
-            if current_vote != "up":
-                try:
-                    log_vote_fn(
-                        question=user_q,
-                        answer=msg["content"],
-                        vote="up",
-                        sources=sources,
-                        search_mode="hybrid",
-                    )
-                except Exception:
-                    pass
-                votes[msg_idx] = "up"
-                st.toast("ধন্যবাদ, মতামত জমা হয়েছে")
-                st.rerun()
+            on_click=_on_feedback_click,
+            args=(msg_idx, "up", user_q, msg["content"], sources, log_vote_fn),
+            disabled=voted,
+        )
 
     with col_down:
         down_selected = current_vote == "down"
-        down_key = (
-            f"vote_down_{msg_idx}_selected" if down_selected
-            else f"vote_down_{msg_idx}"
-        )
-        if st.button(
+        st.button(
             "সহায়ক নয়" + (" ✓" if down_selected else ""),
-            key=down_key,
+            key=f"vote_down_{msg_idx}_selected" if down_selected else f"vote_down_{msg_idx}",
             help="উত্তরটি সহায়ক নয়",
             type="primary" if down_selected else "secondary",
-        ):
-            if current_vote != "down":
-                try:
-                    log_vote_fn(
-                        question=user_q,
-                        answer=msg["content"],
-                        vote="down",
-                        sources=sources,
-                        search_mode="hybrid",
-                    )
-                except Exception:
-                    pass
-                votes[msg_idx] = "down"
-                st.toast("ধন্যবাদ, মতামত জমা হয়েছে")
-                st.rerun()
+            on_click=_on_feedback_click,
+            args=(msg_idx, "down", user_q, msg["content"], sources, log_vote_fn),
+            disabled=voted,
+        )

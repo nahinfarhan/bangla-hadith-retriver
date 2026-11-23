@@ -133,15 +133,20 @@ def _init_query_log() -> bool:
         return False
 
 
-def _log_query(q: str, answer: str, sources: list, started: float) -> None:
-    """Anonymously log one Q&A. Never raises: a log error must not break the answer."""
+def _log_query(q: str, answer: str, sources: list, started: float, msg_idx: int) -> None:
+    """Anonymously log one Q&A and remember its row id for the feedback buttons.
+
+    Never raises: a log error must not break the answer.
+    """
     try:
         import time as _time
         from query_logger import log_qa, hadith_ids_from_sources
-        log_qa(
+        log_id = log_qa(
             q, answer or "", hadith_ids_from_sources(sources),
             int((_time.perf_counter() - started) * 1000),
         )
+        if log_id >= 0:
+            st.session_state.setdefault("chat_log_ids", {})[msg_idx] = log_id
     except Exception:
         pass
 
@@ -362,7 +367,7 @@ def _handle_question(q: str, engine, qcache) -> None:
         st.session_state.chat_sources[msg_idx] = sources
         st.session_state.feedback_votes.setdefault(msg_idx, None)
         st.session_state["_scroll_to_question"] = True
-        _log_query(q, answer, sources, _started)
+        _log_query(q, answer, sources, _started, msg_idx)
         st.rerun()
         return
 
@@ -466,7 +471,7 @@ def _handle_question(q: str, engine, qcache) -> None:
     )
     st.session_state.chat_sources[msg_idx] = sources
     st.session_state.feedback_votes.setdefault(msg_idx, None)
-    _log_query(q, answer, sources, _started)
+    _log_query(q, answer, sources, _started, msg_idx)
     # Only cache non-empty, non-error answers (Feature 4)
     if answer and not answer.startswith("_(AI answer unavailable"):
         qcache.set(q, answer, sources)
