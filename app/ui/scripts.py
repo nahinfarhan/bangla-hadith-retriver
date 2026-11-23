@@ -288,6 +288,33 @@ def infinite_scroll_script(sentinel_id: str = "sentinel_load_more") -> str:
 """
 
 
+def scroll_to_last_question_script() -> str:
+    """Scroll the newest user question bubble to the top of the viewport.
+
+    Rendered with st.components.v1.html(height=0).  Runs right after a new
+    question is shown (and again after the final rerun re-renders the thread),
+    so focus stays on the new question and its answer instead of the old
+    conversation.  The user can still scroll up freely afterwards.
+    Retries briefly because Streamlit lays the page out asynchronously.
+    """
+    return """
+<script>
+(function () {
+  var pd = window.parent.document;
+  function go() {
+    var bubbles = pd.querySelectorAll('.iq-msg-user');
+    if (!bubbles.length) return;
+    var el = bubbles[bubbles.length - 1];
+    el.style.scrollMarginTop = '72px';
+    el.scrollIntoView({ block: 'start', behavior: 'auto' });
+  }
+  go();
+  [100, 300, 700].forEach(function (t) { setTimeout(go, t); });
+})();
+</script>
+"""
+
+
 def aria_patch_script() -> str:
     """Patches aria-label onto icon-only Streamlit buttons and adds
     role='status' to toast containers. Uses a MutationObserver for rerenders.

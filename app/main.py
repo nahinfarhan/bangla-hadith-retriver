@@ -36,7 +36,7 @@ from ui.components import (
 )
 from ui.scripts import (
     theme_toggle_script, copy_handler_script,
-    infinite_scroll_script, aria_patch_script,
+    infinite_scroll_script, aria_patch_script, scroll_to_last_question_script,
 )
 from ui.data import browse_index, fetch_page
 
@@ -332,6 +332,7 @@ def _handle_question(q: str, engine, qcache) -> None:
         )
         st.session_state.chat_sources[msg_idx] = sources
         st.session_state.feedback_votes.setdefault(msg_idx, None)
+        st.session_state["_scroll_to_question"] = True
         st.rerun()
         return
 
@@ -346,6 +347,9 @@ def _handle_question(q: str, engine, qcache) -> None:
         ),
         unsafe_allow_html=True,
     )
+    # Focus the new question (scroll it to the top of the viewport).
+    st.components.v1.html(scroll_to_last_question_script(), height=0)
+    st.session_state["_scroll_to_question"] = True
 
     # Typing indicator + status line while retrieval runs (can take a while
     # on the first question, when the model and BM25 index are loaded).
@@ -651,6 +655,10 @@ body.dark{{
     else:
         # ── CONVERSATION STATE ────────────────────────────────────────────
         _render_thread(qcache)
+
+        # After a new question was answered, keep the focus on it.
+        if st.session_state.pop("_scroll_to_question", False):
+            st.components.v1.html(scroll_to_last_question_script(), height=0)
 
         # Pre-filled question banner (matrix row 10: pre-fill, not sent)
         if pending:
