@@ -20,6 +20,10 @@ WORKDIR /app
 COPY requirements-docker.txt .
 RUN pip install --no-cache-dir --timeout 1000 -r requirements-docker.txt
 
+# ── Google Analytics 4 (traffic/pageviews only; no queries or answers) ────────
+COPY scripts/inject_ga4.py /tmp/inject_ga4.py
+RUN python /tmp/inject_ga4.py && rm /tmp/inject_ga4.py
+
 # ── Application source only (data/models mounted at runtime) ──────────────────
 COPY app/ ./app/
 COPY .streamlit/ ./.streamlit/

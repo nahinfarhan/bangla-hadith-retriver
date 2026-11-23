@@ -121,6 +121,32 @@ def load_query_cache():
 
 
 @st.cache_resource(show_spinner=False)
+def _init_query_log() -> bool:
+    """Create the anonymous query-log DB once per process and prune old rows."""
+    try:
+        from query_logger import init_log_db, prune_old_logs
+        ok = init_log_db()
+        if ok:
+            prune_old_logs(days=90)
+        return ok
+    except Exception:
+        return False
+
+
+def _log_query(q: str, answer: str, sources: list, started: float) -> None:
+    """Anonymously log one Q&A. Never raises: a log error must not break the answer."""
+    try:
+        import time as _time
+        from query_logger import log_qa, hadith_ids_from_sources
+        log_qa(
+            q, answer or "", hadith_ids_from_sources(sources),
+            int((_time.perf_counter() - started) * 1000),
+        )
+    except Exception:
+        pass
+
+
+@st.cache_resource(show_spinner=False)
 def load_hadith_engine():
     from hybrid_search import HybridHadithSearch
     db_path = str(Path(__file__).parent.parent / "data" / "hadith_vectors")
@@ -315,6 +341,9 @@ def _handle_question(q: str, engine, qcache) -> None:
     from hadith_chat import synthesize_answer_stream
     from feedback import log_vote  # noqa: imported here to avoid circular at module level
 
+    import time as _time
+    _started = _time.perf_counter()  # end-to-end latency for the query log
+
     # 1. Cache lookup FIRST (fixes the old bug where retrieval ran first)
     cache_hit = qcache.get(q)
 
@@ -333,6 +362,7 @@ def _handle_question(q: str, engine, qcache) -> None:
         st.session_state.chat_sources[msg_idx] = sources
         st.session_state.feedback_votes.setdefault(msg_idx, None)
         st.session_state["_scroll_to_question"] = True
+        _log_query(q, answer, sources, _started)
         st.rerun()
         return
 
@@ -436,6 +466,7 @@ def _handle_question(q: str, engine, qcache) -> None:
     )
     st.session_state.chat_sources[msg_idx] = sources
     st.session_state.feedback_votes.setdefault(msg_idx, None)
+    _log_query(q, answer, sources, _started)
     # Only cache non-empty, non-error answers (Feature 4)
     if answer and not answer.startswith("_(AI answer unavailable"):
         qcache.set(q, answer, sources)
@@ -981,6 +1012,7 @@ def main() -> None:
         _err = e
 
     qcache = load_query_cache()
+    _init_query_log()
 
     # Route to the active view
     view = st.session_state.get("view", "chat")
@@ -990,6 +1022,11 @@ def main() -> None:
         general_documents_tab()
     else:
         render_chat_view(engine, engine_ok, _err, qcache)
+        st.caption(
+            "Questions are logged anonymously (no personal data or IP addresses) "
+            "to help improve search quality. • "
+            "সেবার মান উন্নয়নের জন্য প্রশ্নগুলো সম্পূর্ণ বেনামে সংরক্ষণ করা হয়।"
+        )
 
 
 if __name__ == "__main__":
