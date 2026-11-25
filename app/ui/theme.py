@@ -1951,4 +1951,13 @@ details.hmore[open] > summary {{ margin-bottom: 4px; }}
 }}
 .st-key-search_loading {{ min-height: 40px; padding: 6px 2px; }}
 .st-key-ai_summary_panel [data-testid="stExpander"] summary svg {{ color: var(--accent) !important; }}
+/* sticky top bar: the bordered wrapper that holds the bar sticks to the top
+   of the scroll area, so the bar stays visible while scrolling */
+[data-testid="stVerticalBlockBorderWrapper"]:has(> .st-key-searchbar) {{
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: var(--bg) !important;
+  padding-bottom: 8px !important;
+}}
 """
