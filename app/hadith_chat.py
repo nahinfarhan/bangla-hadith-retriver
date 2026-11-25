@@ -55,6 +55,44 @@ def _extract_core(text: str, bangla: bool, max_chars: int = 700) -> str:
 
 # ── Prompt builder ────────────────────────────────────────────────────────────
 
+def _build_summary_prompt(question: str, snippets: list, bangla: bool) -> str:
+    """Short bullet-point summary prompt used by the search page's AI button."""
+    context = "\n\n".join(
+        f"[{ref}] {book} #{hid}:\n{text}"
+        for ref, book, hid, text in snippets
+    )
+    if bangla:
+        return f"""তুমি একজন বিশেষজ্ঞ ইসলামিক পণ্ডিতের সহকারী। নিচের হাদিসগুলোর ভিত্তিতে প্রশ্নের একটি সংক্ষিপ্ত সারসংক্ষেপ লেখো।
+
+নিয়মাবলী:
+- শুধুমাত্র নিচের হাদিস থেকে পাওয়া তথ্য ব্যবহার করো, বাইরের জ্ঞান যোগ করো না
+- উত্তর বাংলায় লেখো
+- প্রথমে এক লাইনের ভূমিকা, তারপর ৩ থেকে ৬টি বুলেট পয়েন্ট; প্রতিটি এক-দুই বাক্যে
+- প্রতিটি পয়েন্টের শেষে সূত্র দাও, যেমন [1], [2]
+- হাদিসে সরাসরি উল্লেখ না থাকলে সৎভাবে স্বীকার করো
+
+হাদিস:
+{context}
+
+প্রশ্ন: {question}
+
+সারসংক্ষেপ:"""
+    return f"""You are an expert Islamic knowledge assistant. Write a SHORT summary answering the question using ONLY the hadith excerpts below.
+
+Rules:
+- Use ONLY the information in the hadiths; add no external knowledge
+- One intro line, then 3 to 6 bullet points of one or two sentences each
+- End every bullet with its source, e.g. [1], [2]
+- If the hadiths do not address the question, say so honestly
+
+Hadiths:
+{context}
+
+Question: {question}
+
+Summary:"""
+
+
 def _build_prompt(question: str, snippets: list, bangla: bool) -> str:
     context = "\n\n".join(
         f"[{ref}] {book} #{hid}:\n{text}"
@@ -184,6 +222,7 @@ def synthesize_answer_stream(
     hadiths: List[Dict],
     api_key: str = "",
     api_keys_raw: str = "",
+    style: str = "detailed",
 ) -> Tuple[Iterator[str], List[Dict]]:
     """
     Streaming version of synthesize_answer.
@@ -226,12 +265,13 @@ def synthesize_answer_stream(
         })
         snippets.append((ref, book, hid, core))
 
-    prompt = _build_prompt(question, snippets, bangla)
+    build = _build_summary_prompt if style == "summary" else _build_prompt
+    prompt = build(question, snippets, bangla)
 
     try:
         chunk_iter = stream_gemini(
             prompt,
-            max_tokens=8192,   # match non-streaming path — no artificial cutoff
+            max_tokens=8192,
             temperature=0.25,  # consistent with synthesize_answer
         )
         return chunk_iter, sources

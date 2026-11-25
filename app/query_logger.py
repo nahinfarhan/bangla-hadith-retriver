@@ -81,6 +81,19 @@ def log_qa(query: str, answer: str, hadith_ids: Iterable, latency_ms: int) -> in
         return -1
 
 
+def update_answer(log_id: int, answer: str) -> None:
+    """Fill in the answer of a row that was logged earlier with an empty answer."""
+    if log_id is None or log_id < 0:
+        return
+    try:
+        with closing(_connect()) as conn, conn:
+            conn.execute(
+                "UPDATE query_logs SET answer = ? WHERE id = ?", (answer or "", log_id)
+            )
+    except Exception as exc:
+        _warn("update_answer", exc)
+
+
 def save_feedback(log_id: int, feedback: str) -> None:
     """Attach 'up' or 'down' feedback to a logged row (reserved for future use)."""
     if feedback not in ("up", "down") or log_id is None or log_id < 0:

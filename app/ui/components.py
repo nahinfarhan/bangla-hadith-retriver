@@ -167,7 +167,7 @@ def parse_hadith(text: str, narrator_meta: str = ""):
 # Logo
 # ═══════════════════════════════════════════════════════════════════════════
 
-def logo_html() -> str:
+def logo_html(width: str = "min(440px,78vw)") -> str:
     """Return the logo HTML using CSS mask technique (single file, both themes)."""
     mask_url = (
         f"url('data:image/png;base64,{LOGO_MASK_B64}')"
@@ -178,13 +178,37 @@ def logo_html() -> str:
         f'<span class="iq-logo" role="img" aria-label="Bangla Islamic Q&A" '
         f'style="-webkit-mask-image:{mask_url};mask-image:{mask_url};'
         f'background:var(--logo);'
-        f'display:block;width:min(440px,78vw);aspect-ratio:1000/128;'
+        f'display:block;width:{width};aspect-ratio:1000/128;'
         f'-webkit-mask-size:contain;mask-size:contain;'
         f'-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;'
         f'-webkit-mask-position:center;mask-position:center;'
         f'transition:background-color 0.2s;">'
         f'</span>'
     )
+
+
+def logo_link_html() -> str:
+    """Logo that links back to the Home / new-search page.
+
+    A plain link reloads the app, which starts a fresh session (empty search).
+    """
+    return html_block(
+        '<a class="iq-logo-link" href="?view=chat" target="_self" '
+        'aria-label="নতুন অনুসন্ধান">' + logo_html(width="100%") + '</a>'
+    )
+
+
+def summary_source_chips_html(sources: list) -> str:
+    """'উৎস: [1] সহীহ বুখারী 597 …' chips under the AI summary."""
+    chips = []
+    for src in sources or []:
+        ref = _esc_text(str(src.get("ref", "")))
+        bname = _esc_text(_book_display(str(src.get("book", ""))))
+        hid = _esc_text(str(src.get("hadith_id", "?")))
+        chips.append(f'<span class="iq-chip"><b>{ref}</b> {bname} {hid}</span>')
+    if not chips:
+        return ""
+    return html_block('<div class="iq-chips"><span class="iq-chips-lbl">উৎস:</span>' + "".join(chips) + '</div>')
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -204,7 +228,7 @@ def top_bar(view: str, in_conversation: bool) -> None:
                 [1, 4], gap="small", vertical_alignment="center"
             )
             with col_back:
-                if st.button("চ্যাটে ফিরুন", key="back_to_chat", type="tertiary"):
+                if st.button("অনুসন্ধানে ফিরুন", key="back_to_chat", type="tertiary"):
                     st.session_state["view"] = "chat"
                     # Reset hadith list state so next open starts fresh
                     st.session_state["h_loaded"] = 0
@@ -220,18 +244,6 @@ def top_bar(view: str, in_conversation: bool) -> None:
                     html_block('<span class="iq-topbar-title">হাদীস গ্রন্থ</span>'),
                     unsafe_allow_html=True,
                 )
-    elif view == "chat" and in_conversation:
-        if st.button("নতুন চ্যাট", key="new_chat", type="tertiary"):
-            st.session_state["chat_history"] = []
-            st.session_state["chat_sources"] = {}
-            st.session_state["feedback_votes"] = {}
-            st.session_state["_stream_error"] = False
-            st.session_state["_retry_question"] = ""
-            try:
-                st.query_params["view"] = "chat"
-            except Exception:
-                pass
-            st.rerun()
     # Home state → empty top bar (no button rendered)
 
 
@@ -321,7 +333,7 @@ def copy_button_html(copy_id: str, text: str) -> str:
 # Hadith card — header + body HTML (used inside st.container)
 # ═══════════════════════════════════════════════════════════════════════════
 
-def hadith_card_header_body_html(h: dict, label: str = "") -> str:
+def hadith_card_header_body_html(h: dict, label: str = "", clamp: bool = False) -> str:
     """Return just the header + body HTML for a hadith card.
 
     Does NOT include the footer (narrator / copy / ask) — those are rendered
@@ -361,6 +373,21 @@ def hadith_card_header_body_html(h: dict, label: str = "") -> str:
                 f'<p class="ar" dir="rtl" lang="ar">{_esc_text(" ".join(ar_parts))}</p>'
             )
 
+    if clamp:
+        # Search results: show the start, put the rest behind "আরও পড়ুন".
+        limit = 230
+        if len(bn_body) > limit + 40:
+            cut = bn_body.rfind(" ", 0, limit)
+            cut = cut if cut > limit // 2 else limit
+            head, rest = bn_body[:cut].rstrip(), bn_body[cut:].strip()
+            body_parts.append(f'<p class="bn">{_esc_text(head)}…</p>')
+            more = f'<p class="bn">{_esc_text(rest)}</p>'
+            if en_body:
+                more += f'<p class="en" lang="en">{_esc_text(en_body)}</p>'
+            body_parts.append(
+                '<details class="hmore"><summary>আরও পড়ুন</summary>' + more + '</details>'
+            )
+            return html_block("".join(body_parts))
     # Bangla body
     if bn_body:
         body_parts.append(f'<p class="bn">{_esc_text(bn_body)}</p>')
@@ -382,6 +409,7 @@ def hadith_card(
     flash: bool = False,
     ask_key: str = "",
     uid: str = "",
+    clamp: bool = False,
 ) -> None:
     """Render a full Hadith Card as a ``st.container`` (fix item 4).
 
@@ -425,7 +453,7 @@ def hadith_card(
     with st.container(border=True, key=container_key):
         # Header + body HTML (fix item 1 — html_block prevents code block)
         st.markdown(
-            hadith_card_header_body_html(h, label=label),
+            hadith_card_header_body_html(h, label=label, clamp=clamp),
             unsafe_allow_html=True,
         )
 
@@ -479,21 +507,15 @@ def hadith_card(
 
 
 def _trigger_ask(h: dict) -> None:
-    """Handle the 'AI-কে জিজ্ঞেস করুন' button click (matrix row 10).
+    """Handle the 'AI-কে জিজ্ঞেস করুন' button click.
 
-    Switches to Chat, starts a new chat, and pre-fills the composer with
-    "<বই> <নম্বর> নম্বর হাদীসটির ব্যাখ্যা কী?" (not sent).
+    Runs a search for "<বই> <নম্বর> নম্বর হাদীসটির ব্যাখ্যা কী?" and opens the
+    AI summary for it right away.
     """
     bname = _book_display(h.get("book", ""))
     hid = h.get("hadith_id", "?")
-    question = f"{bname} {hid} নম্বর হাদীসটির ব্যাখ্যা কী?"
-    # Start a new chat: clear history so Home shows with the question pre-filled
-    st.session_state["chat_history"] = []
-    st.session_state["chat_sources"] = {}
-    st.session_state["feedback_votes"] = {}
-    st.session_state["_stream_error"] = False
-    st.session_state["_retry_question"] = ""
-    st.session_state["_pending_ask"] = question
+    st.session_state["_do_search"] = f"{bname} {hid} নম্বর হাদীসটির ব্যাখ্যা কী?"
+    st.session_state["_auto_summary"] = True
     st.session_state["view"] = "chat"
     try:
         st.query_params["view"] = "chat"

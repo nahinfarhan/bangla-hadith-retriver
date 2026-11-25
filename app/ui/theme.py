@@ -1698,4 +1698,257 @@ footer[data-testid="stFooter"],
   border: 0 !important;
   background: transparent !important;
 }}
+/* ═══════════════════════════════════════════════════════════════════
+   22.  Search page (Google-style): logo | search bar | Hadith Books
+═══════════════════════════════════════════════════════════════════ */
+.st-key-searchbar {{
+  padding: 6px 0 2px;
+  margin-bottom: 4px;
+}}
+.st-key-searchbar [data-testid="stHorizontalBlock"] {{
+  flex-wrap: nowrap !important;
+  align-items: center !important;
+  gap: 8px !important;
+}}
+.st-key-searchbar [data-testid="stColumn"] {{
+  min-width: 0 !important;
+  width: auto !important;
+}}
+.iq-logo-link {{ display: block; line-height: 0; }}
+
+/* the pill */
+.st-key-searchbar [data-testid="stForm"] {{
+  border: 1px solid var(--line) !important;
+  border-radius: 999px !important;
+  background: var(--surface) !important;
+  padding: 3px 6px 3px 18px !important;
+  box-shadow: 0 1px 6px rgba(20, 40, 30, 0.08);
+  transition: border-color .2s, box-shadow .2s;
+}}
+.st-key-searchbar [data-testid="stForm"]:focus-within {{
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px rgba(13, 107, 81, 0.15);
+}}
+.st-key-searchbar [data-testid="stForm"] [data-testid="stHorizontalBlock"] {{
+  gap: 2px !important;
+}}
+.st-key-searchbar [data-testid="stTextInput"] > div,
+.st-key-searchbar [data-testid="stTextInput"] div[data-baseweb="input"],
+.st-key-searchbar [data-testid="stTextInput"] div[data-baseweb="base-input"],
+.st-key-searchbar [data-testid="stTextInput"] input {{
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  outline: 0 !important;
+}}
+.st-key-searchbar [data-testid="stTextInput"] input {{
+  font-size: 15px !important;
+  padding: 9px 0 !important;
+  color: var(--ink) !important;
+}}
+.st-key-searchbar [data-testid="InputInstructions"] {{ display: none !important; }}
+/* ✕ sits before the search button, but Search stays the Enter-key submit */
+.st-key-searchbar [data-testid="stForm"] [data-testid="stColumn"]:nth-child(1) {{ flex: 1 1 auto !important; }}
+.st-key-searchbar [data-testid="stForm"] [data-testid="stColumn"]:nth-child(2) {{ order: 3; flex: 0 0 40px !important; }}
+.st-key-searchbar [data-testid="stForm"] [data-testid="stColumn"]:nth-child(3) {{ order: 2; flex: 0 0 34px !important; }}
+.st-key-searchbar [data-testid="stForm"] button p {{ display: none !important; }}
+.st-key-searchbar [data-testid="stForm"] button {{
+  padding: 0 !important;
+  min-height: 0 !important;
+  display: flex; align-items: center; justify-content: center;
+}}
+.st-key-searchbar [data-testid="stForm"] [data-testid="stColumn"]:nth-child(2) button {{
+  width: 38px; height: 38px;
+  border-radius: 50% !important;
+  background: var(--accent) !important;
+  border: 0 !important;
+  color: #fff !important;
+}}
+.st-key-searchbar [data-testid="stForm"] [data-testid="stColumn"]:nth-child(3) button {{
+  width: 32px; height: 32px;
+  border-radius: 50% !important;
+  background: transparent !important;
+  border: 0 !important;
+  color: var(--muted) !important;
+}}
+.st-key-searchbar [data-testid="stForm"] [data-testid="stColumn"]:nth-child(3) button:hover {{
+  background: var(--surface-2) !important;
+}}
+/* Hadith Books pill */
+.st-key-open_books button {{
+  height: 44px;
+  padding: 0 16px;
+  border-radius: 999px !important;
+  border: 1px solid var(--line) !important;
+  background: var(--surface) !important;
+  color: var(--ink) !important;
+  white-space: nowrap;
+  font-weight: 500;
+  box-shadow: var(--shadow);
+}}
+.st-key-open_books button:hover {{
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+}}
+
+/* query sentence + count */
+.iq-qline {{
+  font-size: 19px;
+  font-weight: 500;
+  color: var(--ink);
+  margin: 16px 2px 2px;
+  line-height: 1.5;
+}}
+.iq-qline b {{ color: var(--accent); font-weight: 700; }}
+.iq-count {{
+  font-size: 13px;
+  color: var(--muted);
+  margin: 0 2px 10px;
+}}
+
+/* AI summary button + panel */
+.stElementContainer.st-key-ai_summary_btn .stButton button[kind="secondary"] {{
+  width: 100%;
+  height: 46px;
+  padding: 0 18px;
+  border-radius: 999px !important;
+  border: 1px solid var(--accent) !important;
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface)) !important;
+  color: var(--accent) !important;
+  font-weight: 600;
+}}
+.stElementContainer.st-key-ai_summary_btn .stButton button[kind="secondary"]:hover {{
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface)) !important;
+}}
+.iq-sum-title {{
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 8px;
+}}
+.iq-chips {{ display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0 10px; }}
+.iq-chips-lbl {{ font-size: 13px; color: var(--muted); }}
+.iq-chip {{
+  font-size: 12.5px;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 12px;
+  background: var(--surface);
+}}
+.iq-chip b {{ color: var(--accent); font-weight: 700; }}
+
+/* hadith card: [n] badge + "আরও পড়ুন" */
+.hcard-label {{
+  font-size: 12px !important;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 1px 7px;
+}}
+details.hmore > summary {{
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 14px;
+  list-style: none;
+  margin: 2px 0 8px;
+}}
+details.hmore > summary::-webkit-details-marker {{ display: none; }}
+details.hmore[open] > summary {{ margin-bottom: 4px; }}
+
+/* show more */
+.st-key-show_more_results button {{
+  width: 100%;
+  height: 46px;
+  border-radius: 999px !important;
+  border: 1px solid var(--line) !important;
+  background: var(--surface) !important;
+  color: var(--ink) !important;
+  font-weight: 500;
+}}
+.st-key-show_more_results button:hover {{
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+}}
+/* ── page geometry ───────────────────────────────────────────────────
+   Wide page only when the search bar is present.  Content column
+   (.st-key-results_col) is 680px; the search bar is exactly the same
+   width, with the logo on its left and Hadith Books on its right. */
+.stMain .block-container:has(.st-key-searchbar),
+[data-testid="stMainBlockContainer"]:has(.st-key-searchbar) {{
+  max-width: 1100px !important;
+}}
+.st-key-results_col {{
+  width: 100%;
+  max-width: 680px;
+  margin: 0 auto;
+}}
+/* cards / panels: drop Streamlit's 15px bordered-wrapper padding so they
+   are exactly as wide as the search bar */
+[data-testid="stVerticalBlockBorderWrapper"]:has(> [class*="st-key-hcard_"]) {{
+  padding: 0 !important;
+}}
+.st-key-searchbar [data-testid="stHorizontalBlock"]:not([data-testid="stForm"] *) {{
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 680px) minmax(0, 1fr);
+  gap: 16px !important;
+  align-items: center !important;
+}}
+.st-key-searchbar [data-testid="stHorizontalBlock"]:not([data-testid="stForm"] *) > [data-testid="stColumn"] {{
+  width: auto !important;
+  flex: none !important;
+  min-width: 0 !important;
+}}
+.st-key-searchbar [data-testid="stHorizontalBlock"]:not([data-testid="stForm"] *) > [data-testid="stColumn"]:nth-child(1) {{
+  justify-self: start;
+  width: 100% !important;
+  max-width: 230px;
+}}
+.st-key-searchbar [data-testid="stHorizontalBlock"]:not([data-testid="stForm"] *) > [data-testid="stColumn"]:nth-child(3) {{
+  justify-self: start;
+}}
+@media (max-width: 960px) {{
+  .st-key-searchbar [data-testid="stHorizontalBlock"]:not([data-testid="stForm"] *) {{
+    grid-template-columns: 120px minmax(0, 1fr) auto;
+    gap: 10px !important;
+  }}
+  .st-key-results_col {{ max-width: none; }}
+}}
+@media (max-width: 640px) {{
+  .st-key-searchbar [data-testid="stHorizontalBlock"]:not([data-testid="stForm"] *) {{
+    grid-template-columns: 84px minmax(0, 1fr) auto;
+  }}
+  .st-key-open_books button p {{ display: none; }}
+  .st-key-open_books button {{ padding: 0 12px; }}
+  .st-key-searchbar {{ padding-right: 52px; }}  /* room for the fixed theme button */
+}}
+
+/* AI summary = collapsible panel (chevron) */
+.st-key-ai_summary_panel [data-testid="stExpander"] {{
+  background: var(--surface) !important;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line)) !important;
+  border-radius: 20px !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 8%, transparent), var(--shadow) !important;
+  overflow: hidden;
+}}
+.st-key-ai_summary_panel [data-testid="stExpander"] details {{ border: 0 !important; }}
+.st-key-ai_summary_panel [data-testid="stExpander"] summary {{
+  padding: 14px 22px !important;
+  color: var(--accent) !important;
+  font-weight: 700;
+}}
+.st-key-ai_summary_panel [data-testid="stExpander"] summary p {{ color: var(--accent) !important; font-weight: 700; }}
+.st-key-ai_summary_feedback {{ margin-top: 8px; }}
+.st-key-ai_summary_panel [data-testid="stExpanderDetails"] {{ padding: 0 22px 14px !important; }}
+/* while a new search runs, hide the previous query's results */
+.st-key-results_col:has(.st-key-search_loading) [data-stale="true"],
+.st-key-results_col:has(.st-key-search_loading) [data-testid="stVerticalBlockBorderWrapper"]:has(> [class*="st-key-hcard_"]),
+.st-key-results_col:has(.st-key-search_loading) [data-testid="stVerticalBlockBorderWrapper"]:has(> .st-key-ai_summary_panel) {{
+  display: none !important;
+}}
+.st-key-search_loading {{ min-height: 40px; padding: 6px 2px; }}
+.st-key-ai_summary_panel [data-testid="stExpander"] summary svg {{ color: var(--accent) !important; }}
 """

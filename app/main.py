@@ -32,11 +32,12 @@ from ui.components import (
     logo_html, top_bar, typing_dots_html, cached_tag_html,
     error_state, skeleton_card_html, hadith_card,
     hadith_card_header_body_html, source_cards, feedback_row,
+    hadith_card, logo_link_html, summary_source_chips_html,
     html_block, parse_hadith,
 )
 from ui.scripts import (
     theme_toggle_script, copy_handler_script,
-    infinite_scroll_script, aria_patch_script, scroll_to_last_question_script,
+    infinite_scroll_script, aria_patch_script, scroll_to_summary_script,
 )
 from ui.data import browse_index, fetch_page
 
@@ -131,24 +132,6 @@ def _init_query_log() -> bool:
         return ok
     except Exception:
         return False
-
-
-def _log_query(q: str, answer: str, sources: list, started: float, msg_idx: int) -> None:
-    """Anonymously log one Q&A and remember its row id for the feedback buttons.
-
-    Never raises: a log error must not break the answer.
-    """
-    try:
-        import time as _time
-        from query_logger import log_qa, hadith_ids_from_sources
-        log_id = log_qa(
-            q, answer or "", hadith_ids_from_sources(sources),
-            int((_time.perf_counter() - started) * 1000),
-        )
-        if log_id >= 0:
-            st.session_state.setdefault("chat_log_ids", {})[msg_idx] = log_id
-    except Exception:
-        pass
 
 
 @st.cache_resource(show_spinner=False)
@@ -336,223 +319,308 @@ def _bn_digits(n: int) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Chat flow
+# Search page (Google-style results)
 # ═══════════════════════════════════════════════════════════════════════════
-def _handle_question(q: str, engine, qcache) -> None:
-    """Cache-first chat flow (Feature 4).
+SEARCH_INITIAL = 3   # hadith cards shown before "show more"
+SEARCH_POOL = 20     # max hadiths kept per search (matches the AI context cap)
 
-    Order: qcache.get → hit: render; miss: search → stream → qcache.set
-    """
-    from hadith_chat import synthesize_answer_stream
-    from feedback import log_vote  # noqa: imported here to avoid circular at module level
 
+def _select_relevant(raw: list) -> list:
+    """Same relevance rule the AI summary uses, so [n] labels line up."""
+    relevant = [h for h in raw if h.get("similarity", 0) >= 40]
+    if not relevant:
+        relevant = raw[:10]
+    return relevant[:SEARCH_POOL]
+
+
+def _clear_search_state() -> None:
+    st.session_state["s_query"] = ""
+    st.session_state["s_results"] = []
+    st.session_state["s_expanded"] = False
+    st.session_state["s_summary"] = None
+    st.session_state["s_summary_open"] = False
+    st.session_state["s_log_id"] = None
+    st.session_state["chat_history"] = []
+    st.session_state["feedback_votes"] = {}
+    st.session_state["chat_log_ids"] = {}
+
+
+def _run_search(q: str, engine, auto_summary: bool = False) -> None:
+    """Retrieve hadiths for q and store them; the AI summary is NOT generated."""
     import time as _time
-    _started = _time.perf_counter()  # end-to-end latency for the query log
-
-    # 1. Cache lookup FIRST (fixes the old bug where retrieval ran first)
-    cache_hit = qcache.get(q)
-
-    # Append user message
-    st.session_state.chat_history.append(
-        {"role": "user", "content": q, "cached": False, "error": False}
-    )
-
-    if cache_hit:
-        # ── Cache HIT ────────────────────────────────────────────────────
-        answer, sources = cache_hit
-        msg_idx = len(st.session_state.chat_history)
-        st.session_state.chat_history.append(
-            {"role": "assistant", "content": answer, "cached": True, "error": False}
-        )
-        st.session_state.chat_sources[msg_idx] = sources
-        st.session_state.feedback_votes.setdefault(msg_idx, None)
-        st.session_state["_scroll_to_question"] = True
-        _log_query(q, answer, sources, _started, msg_idx)
-        st.rerun()
-        return
-
-    # ── Cache MISS: retrieve → stream → store ────────────────────────────
-    msg_idx = len(st.session_state.chat_history)
-
-    # Show the user's question immediately (before the slow retrieval),
-    # so the UI reacts the moment the question is sent.
-    st.markdown(
-        html_block(
-            f'<div class="iq-msg-user"><p class="iq-bubble">{_esc(q)}</p></div>'
-        ),
-        unsafe_allow_html=True,
-    )
-    # Focus the new question (scroll it to the top of the viewport).
-    st.components.v1.html(scroll_to_last_question_script(), height=0)
-    st.session_state["_scroll_to_question"] = True
-
-    # Typing indicator + status line while retrieval runs (can take a while
-    # on the first question, when the model and BM25 index are loaded).
-    typing_placeholder = st.empty()
-    typing_placeholder.markdown(
-        html_block(
-            '<div class="iq-msg-ai">'
-            '<div class="iq-avatar">✦</div>'
-            '<div class="iq-ai-body">'
-            + typing_dots_html() +
-            '<span class="iq-status">হাদীস খোঁজা হচ্ছে…</span>'
-            '</div></div>'
-        ),
-        unsafe_allow_html=True,
-    )
-
+    started = _time.perf_counter()
+    _clear_search_state()
+    st.session_state["s_query"] = q
+    st.session_state["s_error"] = False
+    raw = []
     try:
-        # Question about a specific hadith ("সহীহ বুখারী 1 নম্বর হাদীস…"):
-        # give the model that hadith plus its neighbours instead of a
-        # semantic search, which does not find a hadith by its number.
-        raw = _hadith_reference_context(q, engine)
-        if not raw:
-            raw = engine.search_hadiths(q, top_k=30, use_reframing=True, extra_keys_raw="")
-    except Exception:
-        typing_placeholder.empty()
-        st.session_state.chat_history.append(
-            {"role": "assistant", "content": "", "cached": False, "error": True}
-        )
-        st.session_state["_stream_error"] = True
-        st.session_state["_retry_question"] = q
-        st.rerun()
-        return
-
-    chunk_iter, sources = synthesize_answer_stream(q, raw)
-
-    # Update the status line: retrieval done, waiting for the first token.
-    typing_placeholder.markdown(
-        html_block(
-            '<div class="iq-msg-ai">'
-            '<div class="iq-avatar">✦</div>'
-            '<div class="iq-ai-body">'
-            + typing_dots_html() +
-            '<span class="iq-status">উত্তর লেখা হচ্ছে…</span>'
-            '</div></div>'
-        ),
-        unsafe_allow_html=True,
-    )
-
-    def _until_first_token(it):
-        """Keep the typing dots until the first chunk, then remove them."""
-        first = True
-        for chunk in it:
-            if first:
-                typing_placeholder.empty()
-                first = False
-            yield chunk
-        if first:  # stream produced nothing
-            typing_placeholder.empty()
-
-    # Stream via st.write_stream, next to the AI avatar
-    with st.container():
-        col_av, col_body = st.columns([0.06, 0.94])
-        with col_av:
-            st.markdown(
-                html_block('<div class="iq-avatar" style="margin-top:4px">✦</div>'),
-                unsafe_allow_html=True,
-            )
-        with col_body:
-            try:
-                answer = st.write_stream(_until_first_token(chunk_iter))
-            except Exception:
-                typing_placeholder.empty()
-                st.session_state.chat_history.append(
-                    {"role": "assistant", "content": "", "cached": False, "error": True}
+        with st.spinner("হাদীস খোঁজা হচ্ছে…"):
+            # "সহীহ বুখারী 1 নম্বর হাদীস…" → that hadith + neighbours
+            raw = _hadith_reference_context(q, engine)
+            if not raw:
+                raw = engine.search_hadiths(
+                    q, top_k=30, use_reframing=True, extra_keys_raw=""
                 )
-                st.session_state["_stream_error"] = True
-                st.session_state["_retry_question"] = q
-                st.rerun()
-                return
-
-    # Successful stream — store in history and cache
-    st.session_state.chat_history.append(
-        {"role": "assistant", "content": answer, "cached": False, "error": False}
-    )
-    st.session_state.chat_sources[msg_idx] = sources
-    st.session_state.feedback_votes.setdefault(msg_idx, None)
-    _log_query(q, answer, sources, _started, msg_idx)
-    # Only cache non-empty, non-error answers (Feature 4)
-    if answer and not answer.startswith("_(AI answer unavailable"):
-        qcache.set(q, answer, sources)
-
-    st.rerun()
+    except Exception:
+        st.session_state["s_error"] = True
+    results = _select_relevant(raw or [])
+    st.session_state["s_results"] = results
+    st.session_state["s_summary_open"] = bool(auto_summary and results)
+    # Anonymous log: question + retrieved IDs now, answer filled in if the
+    # user opens the AI summary.
+    try:
+        from query_logger import log_qa, hadith_ids_from_sources
+        st.session_state["s_log_id"] = log_qa(
+            q, "", hadith_ids_from_sources(results),
+            int((_time.perf_counter() - started) * 1000),
+        )
+    except Exception:
+        st.session_state["s_log_id"] = None
 
 
-def _render_thread(qcache) -> None:
-    """Render the full conversation history."""
+def _submit_search() -> None:
+    """Form callback: runs before the rerun, hands the typed query to the page."""
+    q = (st.session_state.get("s_input") or "").strip()
+    if q:
+        st.session_state["_do_search"] = q
+
+
+def _clear_search_box() -> None:
+    st.session_state["s_input"] = ""
+
+
+def _open_hadith_books() -> None:
+    st.session_state["view"] = "hadith"
+    try:
+        st.query_params["view"] = "hadith"
+    except Exception:
+        pass
+
+
+def _toggle_summary() -> None:
+    opening = not st.session_state.get("s_summary_open", False)
+    st.session_state["s_summary_open"] = opening
+    if opening:
+        st.session_state["_scroll_summary"] = True  # bring the panel into view
+
+
+def _show_more() -> None:
+    st.session_state["s_expanded"] = True
+
+
+def _retry_summary() -> None:
+    st.session_state["s_summary"] = None
+
+
+def _render_search_bar() -> None:
+    """Top row: logo | search bar (✕ + search) | Hadith Books button."""
+    with st.container(key="searchbar"):
+        c_logo, c_form, c_books = st.columns(
+            [2.3, 6.4, 2.2], gap="small", vertical_alignment="center"
+        )
+        with c_logo:
+            st.markdown(logo_link_html(), unsafe_allow_html=True)
+        with c_form:
+            with st.form("search_form", clear_on_submit=False, border=False):
+                c_in, c_go, c_x = st.columns(
+                    [10, 1.4, 1.2], gap="small", vertical_alignment="center"
+                )
+                with c_in:
+                    st.text_input(
+                        "অনুসন্ধান", key="s_input",
+                        label_visibility="collapsed",
+                        placeholder="হাদীস খুঁজুন…",
+                    )
+                # Search is the FIRST submit button so Enter triggers it;
+                # CSS puts the ✕ visually before it.
+                with c_go:
+                    st.form_submit_button(
+                        "খুঁজুন", icon=":material/search:", type="primary",
+                        on_click=_submit_search,
+                    )
+                with c_x:
+                    st.form_submit_button(
+                        "মুছুন", icon=":material/close:", type="tertiary",
+                        on_click=_clear_search_box,
+                    )
+        with c_books:
+            st.button(
+                "হাদীস গ্রন্থ", key="open_books", icon=":material/menu_book:",
+                on_click=_open_hadith_books,
+            )
+
+
+def _render_summary_panel(q: str, results: list, qcache) -> None:
+    """AI summary. Generated only after the user clicks the AI button."""
+    from hadith_chat import synthesize_answer_stream
     from feedback import log_vote
 
-    hist = st.session_state.chat_history
-    votes = st.session_state.feedback_votes
+    with st.container(key="ai_summary_panel"), st.expander("✦ AI সারসংক্ষেপ", expanded=True):
+        summ = st.session_state.get("s_summary")
 
-    for idx, msg in enumerate(hist):
-        if msg["role"] == "user":
-            st.markdown(
-                html_block(
-                    f'<div class="iq-msg-user">'
-                    f'<p class="iq-bubble">{_esc(msg["content"])}</p>'
-                    f'</div>'
-                ),
-                unsafe_allow_html=True,
-            )
-        elif msg.get("error"):
-            # Fix item 7: error state with retry button
-            error_state(st.session_state.get("_retry_question", ""))
-        else:
-            # AI message
-            cached = msg.get("cached", False)
-            with st.container():
-                col_av, col_body = st.columns([0.06, 0.94])
-                with col_av:
-                    st.markdown(
-                        html_block(
-                            '<div class="iq-avatar" style="margin-top:4px">✦</div>'
-                        ),
-                        unsafe_allow_html=True,
+        if summ is None:
+            cache_key = f"summary2::{q}"
+            hit = qcache.get(cache_key)
+            if hit:
+                answer, sources = hit
+                st.session_state["s_summary"] = {
+                    "answer": answer, "sources": sources, "error": False,
+                }
+            else:
+                try:
+                    chunk_iter, sources = synthesize_answer_stream(
+                        q, results, style="summary"
                     )
-                with col_body:
-                    if cached:
-                        st.markdown(cached_tag_html(), unsafe_allow_html=True)
-                    # Render with st.markdown so streamed and replayed look identical
-                    st.markdown(msg["content"])
-                    srcs = st.session_state.chat_sources.get(idx, [])
-                    if srcs:
-                        source_cards(srcs, uid=f"m{idx}")
-                    feedback_row(idx, msg, srcs, log_vote)
+                    if st.session_state.get("_scroll_summary"):
+                        st.components.v1.html(scroll_to_summary_script(), height=0)
+                    with st.spinner("সারসংক্ষেপ তৈরি হচ্ছে…"):
+                        answer = st.write_stream(chunk_iter)
+                    st.session_state["s_summary"] = {
+                        "answer": answer, "sources": sources, "error": False,
+                    }
+                    if answer and not answer.startswith("_(AI answer unavailable"):
+                        qcache.set(cache_key, answer, sources)
+                except Exception:
+                    st.session_state["s_summary"] = {
+                        "answer": "", "sources": [], "error": True,
+                    }
+            summ = st.session_state["s_summary"]
+            # Anonymous log: attach the answer to this search's row.
+            try:
+                from query_logger import update_answer
+                log_id = st.session_state.get("s_log_id")
+                if log_id is not None and not summ["error"]:
+                    update_answer(log_id, summ["answer"])
+                    # feedback_row reads the question + log id from these
+                    st.session_state["chat_history"] = [
+                        {"role": "user", "content": q},
+                        {"role": "assistant", "content": summ["answer"]},
+                    ]
+                    st.session_state["chat_log_ids"] = {1: log_id}
+            except Exception:
+                pass
+            st.rerun()
+            return
 
-    # Handle retry button (matrix row 7: no duplicate user bubble)
-    if st.session_state.get("_stream_error") and st.session_state.get("_retry_question"):
-        error_state(st.session_state.get("_retry_question", ""))
+        if summ["error"]:
+            st.error("সারসংক্ষেপ তৈরি করা যায়নি।")
+            st.button("আবার চেষ্টা করুন", key="retry_summary", on_click=_retry_summary)
+            return
+
+        if st.session_state.pop("_scroll_summary", False):
+            st.components.v1.html(scroll_to_summary_script(), height=0)
+        st.markdown(summ["answer"])
+        # Chips only for the sources the summary actually cites ([1], [2] …)
+        cited = {int(n) for n in _re.findall(r"\[(\d+)\]", summ["answer"])}
+        shown = [x for x in summ["sources"] if x.get("idx") in cited] or summ["sources"][:6]
+        chips = summary_source_chips_html(shown)
+        if chips:
+            st.markdown(chips, unsafe_allow_html=True)
+
+    # Feedback sits under the whole summary card, not inside it.
+    summ = st.session_state.get("s_summary")
+    if summ and not summ["error"]:
+        with st.container(key="ai_summary_feedback"):
+            feedback_row(1, {"content": summ["answer"]}, summ["sources"], log_vote)
+            st.caption("AI ভুল করতে পারে। উৎস যাচাই করে নিন।")
+
+
+def _render_results_page(engine, qcache, incoming: str = "", auto_summary: bool = False) -> None:
+    # The top bar is drawn first, so it is visible while the search runs.
+    _render_search_bar()
+
+    with st.container(key="results_col"):
+        if incoming:
+            # Spinner sits under the bar; CSS hides the previous results
+            # (stale elements) while this container exists.
+            with st.container(key="search_loading"):
+                _run_search(incoming, engine, auto_summary=auto_summary)
+            # Redraw without the loading container (and its CSS) so the
+            # new results are shown normally.
+            st.rerun()
+        _render_results_body(qcache)
+
+
+def _render_results_body(qcache) -> None:
+    q = st.session_state["s_query"]
+    results = st.session_state["s_results"]
+    n = len(results)
+
+    if st.session_state.get("s_error"):
+        st.error("খোঁজার সময় সমস্যা হয়েছে। আবার চেষ্টা করুন।")
+        return
+
+    if n == 0:
+        st.markdown(
+            html_block(
+                f'<div class="iq-qline"><b>“{_esc(q)}”</b> এর জন্য কোনো প্রাসঙ্গিক হাদীস পাওয়া যায়নি</div>'
+            ),
+            unsafe_allow_html=True,
+        )
+        return
+
+    st.markdown(
+        html_block(
+            f'<div class="iq-qline"><b>“{_esc(q)}”</b> এর জন্য হাদীস দেখানো হচ্ছে</div>'
+            f'<div class="iq-count">মোট {_bn_digits(n)}টি হাদীস পাওয়া গেছে</div>'
+        ),
+        unsafe_allow_html=True,
+    )
+
+
+    visible = results if st.session_state.get("s_expanded") else results[:SEARCH_INITIAL]
+    for i, h in enumerate(visible, 1):
+        book_key = str(h.get("book", "")).replace(" ", "_")
+        hadith_card(
+            h, label=f"[{i}] ", flash=False, uid="s", clamp=True,
+            ask_key=f"ask_{book_key}_{h.get('hadith_id', '?')}_s",
+        )
+
+    hidden = n - len(visible)
+    if hidden > 0:
+        st.button(
+            f"আরও {_bn_digits(hidden)}টি হাদীস দেখান",
+            key="show_more_results", icon=":material/expand_more:",
+            on_click=_show_more,
+        )
+
+    # AI summary: last, under the "show more" button
+    st.button(
+        "AI সারসংক্ষেপ", key="ai_summary_btn", icon=":material/auto_awesome:",
+        on_click=_toggle_summary, use_container_width=True,
+    )
+    if st.session_state.get("s_summary_open"):
+        _render_summary_panel(q, results, qcache)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Chat view
+# Chat view (Home hero + search results)
 # ═══════════════════════════════════════════════════════════════════════════
 def render_chat_view(engine, engine_ok: bool, err, qcache) -> None:
-    hist = st.session_state.chat_history
-    in_conversation = len(hist) > 0
+    top_bar("chat", False)
 
-    # Top bar (fix item 7: real ghost pill buttons, no stray line)
-    top_bar("chat", in_conversation)
-
-    # Handle pending "AI-কে জিজ্ঞেস করুন" pre-fill
-    pending = st.session_state.get("_pending_ask", "")
-
-    # A question sent from the Home hero (via ?_q=) switches straight to the
-    # conversation layout: no hero, the user bubble + typing dots show at once.
-    hero_q = (st.session_state.pop("_hero_question", "") or "").strip()
-    if hero_q and not in_conversation:
+    # A query can arrive from: the search bar (_do_search), the home hero
+    # (?_q= → _hero_question) or a card's "AI-কে জিজ্ঞেস করুন" (_do_search +
+    # _auto_summary).  Run it before any widget is created.
+    incoming = (
+        st.session_state.pop("_do_search", "")
+        or st.session_state.pop("_hero_question", "")
+        or ""
+    ).strip()
+    auto_summary = bool(st.session_state.pop("_auto_summary", False))
+    pending = ""  # kept for the hero template below
+    if incoming:
         if not engine_ok:
             st.error(
                 "ডেটাবেস প্রস্তুত নয়। "
                 "Run `python3 app/build_hadith_db.py` first."
             )
             return
-        _handle_question(hero_q, engine, qcache)
-        return
+        st.session_state["s_input"] = incoming  # set before the widget exists
 
-    if not in_conversation:
+    has_query = bool(incoming) or bool(st.session_state.get("s_query"))
+
+    if not has_query:
         # ── HOME STATE ────────────────────────────────────────────────────
         # st.markdown('<div>') open/close wrappers don't work — Streamlit
         # wraps each call in its own element, auto-closing the div.
@@ -687,50 +755,8 @@ body.dark{{
         # hero input (see value= above) and is NOT sent automatically.
         if pending:
             st.session_state["_pending_ask"] = ""
-
     else:
-        # ── CONVERSATION STATE ────────────────────────────────────────────
-        _render_thread(qcache)
-
-        # After a new question was answered, keep the focus on it.
-        if st.session_state.pop("_scroll_to_question", False):
-            st.components.v1.html(scroll_to_last_question_script(), height=0)
-
-        # Pre-filled question banner (matrix row 10: pre-fill, not sent)
-        if pending:
-            st.info(f"প্রশ্ন: {pending}\n\nপাঠাতে নিচের বাক্সে Enter চাপুন।")
-
-        # "হাদীস গ্রন্থ" pill docked under the composer (CSS-positioned)
-        with st.container(key="dock_hadith"):
-            if st.button("📖 হাদীস গ্রন্থ", key="dock_hadith_btn"):
-                st.session_state["view"] = "hadith"
-                try:
-                    st.query_params["view"] = "hadith"
-                except Exception:
-                    pass
-                st.rerun()
-
-        # Fix item 5: st.chat_input at top level pins to the bottom
-        question = st.chat_input(
-            placeholder="আপনার প্রশ্ন লিখুন…",
-            key="chat_input_conv",
-        )
-
-        if pending:
-            st.session_state["_pending_ask"] = ""
-
-        # If pending ask and user pressed Enter without typing, use pending
-        if question is None and pending:
-            question = pending
-
-        if question and question.strip():
-            if not engine_ok:
-                st.error(
-                    "ডেটাবেস প্রস্তুত নয়। "
-                    "Run `python3 app/build_hadith_db.py` first."
-                )
-                return
-            _handle_question(question.strip(), engine, qcache)
+        _render_results_page(engine, qcache, incoming, auto_summary)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

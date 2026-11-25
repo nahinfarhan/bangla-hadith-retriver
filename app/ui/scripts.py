@@ -288,6 +288,22 @@ def infinite_scroll_script(sentinel_id: str = "sentinel_load_more") -> str:
 """
 
 
+def scroll_to_summary_script() -> str:
+    """Scroll the AI summary panel into view after it is opened."""
+    return """
+<script>
+(function () {
+  var pd = window.parent.document;
+  function go() {
+    var el = pd.querySelector('.st-key-ai_summary_panel');
+    if (el) el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }
+  [60, 300, 800].forEach(function (t) { setTimeout(go, t); });
+})();
+</script>
+"""
+
+
 def scroll_to_last_question_script() -> str:
     """Scroll the newest user question bubble to the top of the viewport.
 
