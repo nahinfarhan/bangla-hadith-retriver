@@ -860,92 +860,95 @@ def render_hadith_view(engine, engine_ok: bool, err) -> None:
         )
         return
 
-    # Top bar (fix item 7: back button + title on same row)
-    top_bar("hadith", False)
+    # Top section (back button, search, book select, number) stays
+    # pinned while scrolling: see .st-key-h_sticky in theme.py.
+    with st.container(key="h_sticky"):
+        # Top bar (fix item 7: back button + title on same row)
+        top_bar("hadith", False)
 
-    # ── Search bar (fix item 8: one pill, Enter submits, no emoji button) ──
-    with st.container(key="h_search_wrap"), \
-            st.form("h_search_form", clear_on_submit=False, border=False):
-        search_val = st.text_input(
-            "হাদীস খুঁজুন",
-            value=st.session_state.get("h_query", ""),
-            placeholder="হাদীস খুঁজুন…",
-            label_visibility="collapsed",
-            key="h_search_input",
-        )
-        search_submitted = st.form_submit_button("খুঁজুন")  # hidden; Enter submits
+        # ── Search bar (fix item 8: one pill, Enter submits, no emoji button) ──
+        with st.container(key="h_search_wrap"), \
+                st.form("h_search_form", clear_on_submit=False, border=False):
+            search_val = st.text_input(
+                "হাদীস খুঁজুন",
+                value=st.session_state.get("h_query", ""),
+                placeholder="হাদীস খুঁজুন…",
+                label_visibility="collapsed",
+                key="h_search_input",
+            )
+            search_submitted = st.form_submit_button("খুঁজুন")  # hidden; Enter submits
 
-    if search_submitted:
-        new_q = search_val.strip()
-        if new_q != st.session_state.get("h_query", ""):
-            st.session_state["h_query"] = new_q
-            st.session_state["h_results"] = []
-            st.session_state["h_loaded"] = 0
-            # Clear cached search so a new query re-runs
-            _cached_hadith_search.clear()
-            st.rerun()
-    elif not search_val.strip() and st.session_state.get("h_query"):
-        # Cleared search → back to browse (matrix row 12)
-        st.session_state["h_query"] = ""
-        st.session_state["h_results"] = []
-        st.session_state["h_loaded"] = 0
-        st.rerun()
-
-    # ── Book select + number field (fix item 8) ────────────────────────────
-    ctrl_col1, ctrl_col2 = st.columns([3, 1.25], gap="small",
-                                      vertical_alignment="center")
-
-    with ctrl_col1:
-        book_names = list(HADITH_BOOKS.values())
-        book_keys  = list(HADITH_BOOKS.keys())
-        if st.session_state.get("h_book") not in HADITH_BOOKS:
-            st.session_state["h_book"] = "Sahih_Bukhari"
-        cur_idx = book_keys.index(st.session_state["h_book"])
-        selected_name = st.selectbox(
-            "হাদীস গ্রন্থ",
-            options=book_names,
-            index=cur_idx,
-            label_visibility="collapsed",
-            key="h_book_select",
-        )
-        selected_key = book_keys[book_names.index(selected_name)]
-        if selected_key != st.session_state.get("h_book"):
-            # Matrix row 13: changing book resets search and number
-            st.session_state["h_book"] = selected_key
+        if search_submitted:
+            new_q = search_val.strip()
+            if new_q != st.session_state.get("h_query", ""):
+                st.session_state["h_query"] = new_q
+                st.session_state["h_results"] = []
+                st.session_state["h_loaded"] = 0
+                # Clear cached search so a new query re-runs
+                _cached_hadith_search.clear()
+                st.rerun()
+        elif not search_val.strip() and st.session_state.get("h_query"):
+            # Cleared search → back to browse (matrix row 12)
             st.session_state["h_query"] = ""
             st.session_state["h_results"] = []
             st.session_state["h_loaded"] = 0
-            st.session_state["h_jump_result"] = None
-            _cached_hadith_search.clear()
             st.rerun()
 
-    with ctrl_col2:
-        # Fix item 8: number field as form with # prefix and go button inside
-        with st.container(key="h_no_wrap"), \
-                st.form("h_no_form", clear_on_submit=False, border=False):
-            hadith_no_str = st.text_input(
-                "হাদীস নম্বর",
-                value="",
-                placeholder="হাদীস নম্বর",
-                label_visibility="collapsed",
-                key="h_no_input",
-            )
-            go_submitted = st.form_submit_button("→")
+        # ── Book select + number field (fix item 8) ────────────────────────────
+        ctrl_col1, ctrl_col2 = st.columns([3, 1.25], gap="small",
+                                          vertical_alignment="center")
 
-        if go_submitted and hadith_no_str and hadith_no_str.strip():
-            try:
-                n = int(hadith_no_str.strip())
-            except ValueError:
-                n = 0
-            if n > 0:
-                result = engine.get_hadith_by_number(n, book=st.session_state["h_book"])
-                if result is None:
-                    bname = book_display(st.session_state["h_book"])
-                    st.toast(f"{bname}-এ {n} নম্বর হাদীস পাওয়া যায়নি")
-                else:
-                    st.session_state["h_jump_result"] = _hadith_to_dict(result)
-                    st.session_state["h_loaded"] = 0
-                    st.rerun()
+        with ctrl_col1:
+            book_names = list(HADITH_BOOKS.values())
+            book_keys  = list(HADITH_BOOKS.keys())
+            if st.session_state.get("h_book") not in HADITH_BOOKS:
+                st.session_state["h_book"] = "Sahih_Bukhari"
+            cur_idx = book_keys.index(st.session_state["h_book"])
+            selected_name = st.selectbox(
+                "হাদীস গ্রন্থ",
+                options=book_names,
+                index=cur_idx,
+                label_visibility="collapsed",
+                key="h_book_select",
+            )
+            selected_key = book_keys[book_names.index(selected_name)]
+            if selected_key != st.session_state.get("h_book"):
+                # Matrix row 13: changing book resets search and number
+                st.session_state["h_book"] = selected_key
+                st.session_state["h_query"] = ""
+                st.session_state["h_results"] = []
+                st.session_state["h_loaded"] = 0
+                st.session_state["h_jump_result"] = None
+                _cached_hadith_search.clear()
+                st.rerun()
+
+        with ctrl_col2:
+            # Fix item 8: number field as form with # prefix and go button inside
+            with st.container(key="h_no_wrap"), \
+                    st.form("h_no_form", clear_on_submit=False, border=False):
+                hadith_no_str = st.text_input(
+                    "হাদীস নম্বর",
+                    value="",
+                    placeholder="হাদীস নম্বর",
+                    label_visibility="collapsed",
+                    key="h_no_input",
+                )
+                go_submitted = st.form_submit_button("→")
+
+            if go_submitted and hadith_no_str and hadith_no_str.strip():
+                try:
+                    n = int(hadith_no_str.strip())
+                except ValueError:
+                    n = 0
+                if n > 0:
+                    result = engine.get_hadith_by_number(n, book=st.session_state["h_book"])
+                    if result is None:
+                        bname = book_display(st.session_state["h_book"])
+                        st.toast(f"{bname}-এ {n} নম্বর হাদীস পাওয়া যায়নি")
+                    else:
+                        st.session_state["h_jump_result"] = _hadith_to_dict(result)
+                        st.session_state["h_loaded"] = 0
+                        st.rerun()
 
     # ── Count line (fix item 8: muted 13px, Bangla digits) ────────────────
     h_query = st.session_state.get("h_query", "")
