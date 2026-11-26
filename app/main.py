@@ -345,25 +345,57 @@ def _clear_search_state() -> None:
     st.session_state["chat_log_ids"] = {}
 
 
-def _run_search(q: str, engine, auto_summary: bool = False) -> None:
-    """Retrieve hadiths for q and store them; the AI summary is NOT generated."""
+def _db_version() -> str:
+    """Changes whenever the vector DB is rebuilt (sentinel file mtime).
+
+    Part of every cache key, so a rebuild automatically retires answers
+    cached against the old database.
+    """
+    try:
+        sentinel = Path(__file__).parent.parent / "data" / "hadith_vectors" / ".build_complete"
+        return str(int(sentinel.stat().st_mtime))
+    except Exception:
+        return "0"
+
+
+def _run_search(q: str, engine, qcache, auto_summary: bool = False) -> None:
+    """Retrieve hadiths for q and store them; the AI summary is NOT generated.
+
+    Results are cached on disk for 7 days (QueryCache TTL), shared by all
+    users, so a repeated question skips reframing and retrieval.
+    """
     import time as _time
     started = _time.perf_counter()
     _clear_search_state()
     st.session_state["s_query"] = q
     st.session_state["s_error"] = False
-    raw = []
+    cache_key = f"search1::{_db_version()}::{q}"
+    results = None
     try:
-        with st.spinner("হাদীস খোঁজা হচ্ছে…"):
-            # "সহীহ বুখারী 1 নম্বর হাদীস…" → that hadith + neighbours
-            raw = _hadith_reference_context(q, engine)
-            if not raw:
-                raw = engine.search_hadiths(
-                    q, top_k=30, use_reframing=True, extra_keys_raw=""
-                )
+        hit = qcache.get(cache_key)
+        if hit:
+            results = hit[1]
     except Exception:
-        st.session_state["s_error"] = True
-    results = _select_relevant(raw or [])
+        results = None
+    if results is None:
+        raw = []
+        try:
+            with st.spinner("হাদীস খোঁজা হচ্ছে…"):
+                # "সহীহ বুখারী 1 নম্বর হাদীস…" → that hadith + neighbours
+                raw = _hadith_reference_context(q, engine)
+                if not raw:
+                    raw = engine.search_hadiths(
+                        q, top_k=30, use_reframing=True, extra_keys_raw=""
+                    )
+        except Exception:
+            st.session_state["s_error"] = True
+        results = _select_relevant(raw or [])
+        # Cache only successful, non-empty searches.
+        if results and not st.session_state["s_error"]:
+            try:
+                qcache.set(cache_key, "results", results)
+            except Exception:
+                pass
     st.session_state["s_results"] = results
     st.session_state["s_summary_open"] = bool(auto_summary and results)
     # Anonymous log: question + retrieved IDs now, answer filled in if the
@@ -459,7 +491,7 @@ def _render_summary_panel(q: str, results: list, qcache) -> None:
         summ = st.session_state.get("s_summary")
 
         if summ is None:
-            cache_key = f"summary2::{q}"
+            cache_key = f"summary2::{_db_version()}::{q}"
             hit = qcache.get(cache_key)
             if hit:
                 answer, sources = hit
@@ -534,7 +566,7 @@ def _render_results_page(engine, qcache, incoming: str = "", auto_summary: bool 
             # Spinner sits under the bar; CSS hides the previous results
             # (stale elements) while this container exists.
             with st.container(key="search_loading"):
-                _run_search(incoming, engine, auto_summary=auto_summary)
+                _run_search(incoming, engine, qcache, auto_summary=auto_summary)
             # Redraw without the loading container (and its CSS) so the
             # new results are shown normally.
             st.rerun()
